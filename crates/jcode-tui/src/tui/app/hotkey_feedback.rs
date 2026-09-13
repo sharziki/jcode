@@ -349,6 +349,11 @@ pub(super) fn build_registry(inputs: &RegistryInputs<'_>) -> Vec<KnownHotkey> {
     ));
     out.push(KnownHotkey::new(
         ctrl('t'),
+        "transcript_toggle",
+        "toggle the full transcript",
+    ));
+    out.push(KnownHotkey::new(
+        alt('q'),
         "queue_mode_toggle",
         "toggle queue mode",
     ));

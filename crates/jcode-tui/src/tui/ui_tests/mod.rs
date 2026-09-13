@@ -119,6 +119,7 @@ struct TestState {
     suppress_info_widgets: bool,
     display_messages: Vec<DisplayMessage>,
     messages_version: u64,
+    focused_output: bool,
     streaming_text: String,
     batch_progress: Option<crate::bus::BatchProgress>,
     queued_messages: Vec<String>,
@@ -181,6 +182,9 @@ impl crate::tui::TuiState for TestState {
     }
     fn display_messages_version(&self) -> u64 {
         self.messages_version
+    }
+    fn full_transcript_visible(&self) -> bool {
+        !self.focused_output
     }
     fn streaming_text(&self) -> &str {
         &self.streaming_text

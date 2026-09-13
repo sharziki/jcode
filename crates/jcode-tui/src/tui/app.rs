@@ -1376,6 +1376,9 @@ pub struct App {
     side_panel_explicit_hidden: bool,
     // Pin read images to side pane
     pin_images: bool,
+    // Focused-output mode hides tool/reasoning/system chatter without deleting
+    // it. Ctrl+T temporarily reveals the full transcript.
+    full_transcript_visible: bool,
     // Inline transcript images render expanded (true) or as collapsed label
     // stubs (false). Toggled with Alt+Shift+I; persisted in UI preferences so
     // it survives restarts and session resumes.
@@ -1539,7 +1542,7 @@ pub struct App {
     // Local transfer preparation currently running in the background.
     pending_local_transfer: Option<PendingLocalTransfer>,
     // Queue mode: if true, Enter during processing queues; if false, Enter queues to send next
-    // Toggle with Ctrl+Tab or Ctrl+T
+    // Toggle with Alt+Q
     queue_mode: bool,
     // Automatically reload the remote server when a newer server binary is detected.
     auto_server_reload: bool,

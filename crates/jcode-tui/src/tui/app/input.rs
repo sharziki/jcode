@@ -2037,14 +2037,14 @@ pub(super) fn handle_control_key(app: &mut App, code: KeyCode) -> bool {
             paste_from_clipboard(app);
             true
         }
-        KeyCode::Tab | KeyCode::Char('t') => {
-            app.queue_mode = !app.queue_mode;
-            let mode_str = if app.queue_mode {
-                "Queue mode: messages wait until response completes"
+        KeyCode::Char('t') => {
+            app.full_transcript_visible = !app.full_transcript_visible;
+            app.scroll_offset = 0;
+            app.set_status_notice(if app.full_transcript_visible {
+                "Transcript: FULL · Ctrl+T returns to focused output"
             } else {
-                "Immediate mode: messages send next (no interrupt)"
-            };
-            app.set_status_notice(mode_str);
+                "Transcript: FOCUSED · Ctrl+T shows reasoning and tools"
+            });
             true
         }
         KeyCode::Left => {
@@ -2339,6 +2339,16 @@ pub(super) fn handle_pre_control_shortcuts(
     code: KeyCode,
     modifiers: KeyModifiers,
 ) -> bool {
+    if modifiers == KeyModifiers::ALT && code == KeyCode::Char('q') {
+        app.queue_mode = !app.queue_mode;
+        app.set_status_notice(if app.queue_mode {
+            "Queue mode: messages wait until response completes"
+        } else {
+            "Immediate mode: messages send next (no interrupt)"
+        });
+        return true;
+    }
+
     // Plain Ctrl+K kills to end of line (emacs habit). Ctrl+Shift+K must fall
     // through to the scroll handler: with the Kitty keyboard protocol enabled,
     // terminals report Ctrl+Shift+K as Char('k') + CONTROL|SHIFT, so without the

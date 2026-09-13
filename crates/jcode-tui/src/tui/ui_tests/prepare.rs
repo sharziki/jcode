@@ -1283,3 +1283,74 @@ fn test_prepare_messages_renders_anchored_reasoning_message_in_flow() {
         joined[reasoning_idx]
     );
 }
+
+#[test]
+fn focused_output_hides_intermediate_transcript_and_shows_progress() {
+    let _guard = crate::storage::lock_test_env();
+    clear_test_render_state_for_tests();
+
+    let state = TestState {
+        focused_output: true,
+        display_messages: vec![
+            DisplayMessage::user("question"),
+            DisplayMessage::reasoning("private reasoning"),
+            DisplayMessage::tool_text("tool output"),
+            DisplayMessage::system("system notice"),
+            DisplayMessage::assistant("final answer"),
+        ],
+        streaming_text: "live hidden stream".to_string(),
+        status: ProcessingStatus::Thinking(Instant::now()),
+        ..Default::default()
+    };
+
+    let prepared = prepare::prepare_messages(&state, 100, 30);
+    let rendered = prepared
+        .materialize_all_lines()
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("question"), "{rendered}");
+    assert!(rendered.contains("final answer"), "{rendered}");
+    assert!(rendered.contains("Generating"), "{rendered}");
+    assert!(rendered.contains("Ctrl+T transcript"), "{rendered}");
+    for hidden in [
+        "private reasoning",
+        "tool output",
+        "system notice",
+        "live hidden stream",
+    ] {
+        assert!(!rendered.contains(hidden), "leaked {hidden}: {rendered}");
+    }
+}
+
+#[test]
+fn focused_output_keeps_latest_idle_system_result() {
+    let _guard = crate::storage::lock_test_env();
+    clear_test_render_state_for_tests();
+
+    let state = TestState {
+        focused_output: true,
+        display_messages: vec![
+            DisplayMessage::system("older internal notice"),
+            DisplayMessage::system("command result"),
+        ],
+        ..Default::default()
+    };
+
+    let rendered = prepare::prepare_messages(&state, 100, 30)
+        .materialize_all_lines()
+        .iter()
+        .map(|line| extract_line_text(line))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(!rendered.contains("older internal notice"), "{rendered}");
+    assert!(rendered.contains("command result"), "{rendered}");
+}

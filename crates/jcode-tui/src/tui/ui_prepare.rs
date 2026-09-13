@@ -671,10 +671,16 @@ pub(super) fn prepare_messages(
             .wrapping_add(u64::from(crate::config::config().display.pin_todos)),
         diagram_mode: app.diagram_mode(),
         centered: app.centered_mode(),
+        full_transcript_visible: app.full_transcript_visible(),
         mermaid_aspect_bucket: crate::tui::mermaid::current_preferred_aspect_ratio_bucket(),
         is_processing: app.is_processing(),
         streaming_text_len: app.streaming_text().len(),
-        streaming_text_hash: super::hash_text_for_cache(app.streaming_text()),
+        streaming_text_hash: super::hash_text_for_cache(app.streaming_text())
+            ^ if !app.full_transcript_visible() && app.is_processing() {
+                super::activity_indicator_frame_index(app.animation_elapsed(), 12.5) as u64
+            } else {
+                0
+            },
         batch_progress_hash: active_batch_progress_hash(app),
         // An unpinned transcript must not reuse a previously prepared frame
         // containing anchored images. With no images, both modes are visually
@@ -802,7 +808,7 @@ fn prepare_messages_inner(app: &dyn TuiState, width: u16, height: u16) -> Prepar
     };
 
     let batch_start = Instant::now();
-    let has_batch_progress = active_batch_progress(app).is_some();
+    let has_batch_progress = app.full_transcript_visible() && active_batch_progress(app).is_some();
     let batch_prefix_blank = has_batch_progress && !body_prepared.wrapped_lines.is_empty();
     let batch_progress_prepared = if has_batch_progress {
         Arc::new(prepare_active_batch_progress(
@@ -819,12 +825,15 @@ fn prepare_messages_inner(app: &dyn TuiState, width: u16, height: u16) -> Prepar
     // Reasoning traces in `current` mode are anchored display messages inside
     // the body now; no separate retained/collapsing trace section exists.
     let reasoning_prepared = Arc::new(empty_prepared_messages());
-    let has_streaming = app.is_processing() && !app.streaming_text().is_empty();
+    let focused = !app.full_transcript_visible();
+    let has_streaming = app.is_processing() && (focused || !app.streaming_text().is_empty());
     let stream_prefix_blank = has_streaming
         && (!body_prepared.wrapped_lines.is_empty()
             || !batch_progress_prepared.wrapped_lines.is_empty()
             || !reasoning_prepared.wrapped_lines.is_empty());
-    let streaming_prepared = if has_streaming {
+    let streaming_prepared = if has_streaming && focused {
+        Arc::new(prepare_focused_progress(app, width, stream_prefix_blank))
+    } else if has_streaming {
         Arc::new(prepare_streaming_cached(app, width, stream_prefix_blank))
     } else {
         Arc::new(empty_prepared_messages())
@@ -1120,6 +1129,7 @@ fn prepare_body_cached(app: &dyn TuiState, width: u16) -> Arc<PreparedMessages> 
             .wrapping_add(u64::from(crate::config::config().display.pin_todos)),
         diagram_mode: app.diagram_mode(),
         centered: app.centered_mode(),
+        full_transcript_visible: app.full_transcript_visible(),
         mermaid_aspect_bucket: crate::tui::mermaid::current_preferred_aspect_ratio_bucket(),
         pin_images: app.pin_images(),
         inline_images_visible: app.inline_images_visible(),
@@ -1378,6 +1388,15 @@ fn render_message_into(
     let centered = ctx.centered;
     let app = ctx.app;
     let role = msg.effective_role();
+    let focused_system_result = role == "system"
+        && !app.is_processing()
+        && msg_global_idx + 1 == ctx.messages.len();
+    if !app.full_transcript_visible()
+        && !matches!(role, "user" | "assistant" | "error")
+        && !focused_system_result
+    {
+        return;
+    }
     // The pinned band is the canonical todo presentation while enabled. Keep
     // todo tool messages in display_messages for history/session fidelity, but
     // omit their duplicate cards from the prepared transcript.
@@ -2347,6 +2366,36 @@ fn prepare_streaming_cached(
     let mut prepared = wrap_lines(lines, &[], &[], &[], width);
     stamp_mermaid_pending(&mut prepared, mermaid_epoch_before);
     prepared
+}
+
+/// Focused-output mode replaces the live reasoning/tool stream with one stable,
+/// animated row. The complete stream remains stored and can be revealed with
+/// Ctrl+T at any time.
+fn prepare_focused_progress(
+    app: &dyn TuiState,
+    width: u16,
+    prefix_blank: bool,
+) -> PreparedMessages {
+    let mut lines = Vec::with_capacity(2);
+    if prefix_blank {
+        lines.push(Line::from(""));
+    }
+    lines.push(
+        Line::from(vec![
+            Span::styled(
+                super::activity_indicator(app.animation_elapsed(), 12.5),
+                Style::default().fg(accent_color()),
+            ),
+            Span::styled(" Generating…", Style::default().fg(ai_color())),
+            Span::styled("  Ctrl+T transcript", Style::default().fg(dim_color())),
+        ])
+        .alignment(if app.centered_mode() {
+            ratatui::layout::Alignment::Center
+        } else {
+            ratatui::layout::Alignment::Left
+        }),
+    );
+    wrap_lines(lines, &[], &[], &[], width)
 }
 
 pub(super) fn prepare_body(

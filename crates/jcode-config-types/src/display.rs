@@ -89,6 +89,10 @@ pub struct DisplayConfig {
     /// always fall back to the technical detail.
     #[serde(default)]
     pub tool_call_details: bool,
+    /// Show only prompts, final assistant responses, and errors in the chat
+    /// viewport. The full transcript remains available with Ctrl+T.
+    #[serde(default)]
+    pub focused_output: bool,
     /// Native terminal scrollbar configuration for scrollable panes
     pub native_scrollbars: NativeScrollbarConfig,
     /// Surface occasional "learn this keybinding" nudges when the user keeps
@@ -158,6 +162,7 @@ impl Default for DisplayConfig {
             show_agentgrep_output: false,
             show_bash_output: false,
             tool_call_details: false,
+            focused_output: false,
             native_scrollbars: NativeScrollbarConfig::default(),
             keybinding_hints: true,
             theme: String::new(),
@@ -251,5 +256,14 @@ mod tests {
         let used: DisplayConfig =
             serde_json::from_str(r#"{"usage_display":"used"}"#).expect("display config");
         assert!(used.usage_display_used());
+    }
+
+    #[test]
+    fn focused_output_is_opt_in_and_deserializes() {
+        assert!(!DisplayConfig::default().focused_output);
+
+        let enabled: DisplayConfig =
+            serde_json::from_str(r#"{"focused_output":true}"#).expect("display config");
+        assert!(enabled.focused_output);
     }
 }

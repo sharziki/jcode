@@ -35,7 +35,7 @@ fn unknown_ctrl_chord_sets_hotkey_feedback_with_suggestion() {
 fn rare_known_hotkey_sets_feedback_and_repeats_stop_once_familiar() {
     let mut app = create_test_app();
 
-    // Ctrl+T toggles queue mode; a fresh JCODE_HOME has no usage history, so
+    // Ctrl+T toggles the transcript; a fresh JCODE_HOME has no usage history, so
     // the first press is "rare" and should explain itself.
     app.handle_key(KeyCode::Char('t'), KeyModifiers::CONTROL)
         .unwrap();
@@ -44,7 +44,7 @@ fn rare_known_hotkey_sets_feedback_and_repeats_stop_once_familiar() {
         .clone()
         .expect("first use of a known hotkey should set feedback");
     assert!(message.contains("Ctrl+T"), "{message}");
-    assert!(message.contains("queue mode"), "{message}");
+    assert!(message.contains("transcript"), "{message}");
 
     // After enough uses the action becomes familiar and the note stops.
     for _ in 0..8 {

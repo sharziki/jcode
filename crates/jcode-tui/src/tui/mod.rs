@@ -294,6 +294,11 @@ pub trait TuiState {
     }
     /// Version counter for display_messages (monotonic, increments on mutation)
     fn display_messages_version(&self) -> u64;
+    /// Whether reasoning, tools, and informational transcript entries are
+    /// currently visible. Focused-output mode keeps these stored but hidden.
+    fn full_transcript_visible(&self) -> bool {
+        true
+    }
     fn streaming_text(&self) -> &str;
     /// JSON payload for the pinned todo band rendered at the top of the chat
     /// viewport when `display.pin_todos` is enabled. `None` when the feature

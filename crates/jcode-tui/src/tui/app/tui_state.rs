@@ -593,6 +593,10 @@ impl crate::tui::TuiState for App {
         self.display_messages_version
     }
 
+    fn full_transcript_visible(&self) -> bool {
+        self.full_transcript_visible
+    }
+
     fn streaming_text(&self) -> &str {
         &self.streaming.streaming_text
     }
