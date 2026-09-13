@@ -34,11 +34,29 @@ apply immediately; no restart.
 | Command | Effect |
 | --- | --- |
 | `/colors` | List every configurable role |
+| `/colors presets` | List the built-in palette presets |
+| `/colors preset <name>` | Apply and save a preset immediately |
 | `/colors <role> <#rrggbb>` | Set one role (saved to config) |
 | `/colors generate <#rrggbb>` | Derive a whole harmonious palette from one seed |
 | `/colors harmony` | Score the palette and list specific fixes |
 | `/colors export` | Print the palette as config TOML |
 | `/colors reset [role]` | Reset one role, or all of them |
+
+## Switching presets
+
+Run `/colors presets` to see the built-in choices, then apply one without
+restarting:
+
+```text
+/colors preset sonic
+```
+
+The bundled presets are `sonic`, `matrix`, `ocean`, `violet`, `sunset`,
+`amber`, `rose`, and `frost`. Each preset is expanded through the same palette
+generator used by `/colors generate`, so it fills all 22 semantic roles and
+adapts to the active light or dark terminal background. The resulting colors
+are saved under `[display.colors]`; individual roles can still be adjusted
+afterward.
 
 ## How every color became configurable
 

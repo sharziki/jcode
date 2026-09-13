@@ -12,6 +12,8 @@ use jcode_tui_style::palette::{ALL_ROLES, Palette, Role, parse_hex, to_hex};
 
 const USAGE: &str = "Usage:\n  \
     /colors                       List every configurable color role\n  \
+    /colors presets               List built-in palette presets\n  \
+    /colors preset <name>         Apply a preset immediately and save it\n  \
     /colors <role> <#rrggbb>      Set a role's color (saved to config)\n  \
     /colors reset [role]          Reset one role, or all of them\n  \
     /colors harmony               Score the palette and list what to fix\n  \
@@ -36,6 +38,8 @@ pub(super) fn handle_colors_command(app: &mut App, trimmed: &str) -> bool {
         None | Some("list") => list_colors(app),
         Some("harmony") | Some("score") => show_harmony(app),
         Some("export") => export_colors(app),
+        Some("presets") => list_presets(app),
+        Some("preset") => apply_preset(app, words.next()),
         Some("reset") => reset_colors(app, words.next()),
         Some("generate") | Some("gen") => generate_palette(app, words.next()),
         Some(role) => match words.next() {
@@ -46,6 +50,54 @@ pub(super) fn handle_colors_command(app: &mut App, trimmed: &str) -> bool {
         },
     }
     true
+}
+
+fn list_presets(app: &mut App) {
+    let mut lines = vec!["Built-in color presets (`/colors preset <name>`):".to_string()];
+    for preset in jcode_tui_style::COLOR_PRESETS {
+        lines.push(format!("  {:<10} {}", preset.name, preset.description));
+    }
+    lines.push(String::new());
+    lines.push("Presets adapt to the active light or dark terminal background.".to_string());
+    app.push_display_message(DisplayMessage::system(lines.join("\n")));
+}
+
+fn apply_preset(app: &mut App, name: Option<&str>) {
+    let Some(name) = name else {
+        app.push_display_message(DisplayMessage::error(format!(
+            "Missing preset name. Run /colors presets to list choices.\n\n{USAGE}"
+        )));
+        return;
+    };
+    let Some(preset) = jcode_tui_style::find_color_preset(name) else {
+        let available = jcode_tui_style::COLOR_PRESETS
+            .iter()
+            .map(|preset| preset.name)
+            .collect::<Vec<_>>()
+            .join(", ");
+        app.push_display_message(DisplayMessage::error(format!(
+            "Unknown color preset '{name}'. Available presets: {available}."
+        )));
+        return;
+    };
+
+    let palette = preset.palette(active_background());
+    match persist_palette(&palette) {
+        Ok(()) => {
+            let report = jcode_tui_style::analyze_harmony(&palette, active_background());
+            app.push_display_message(DisplayMessage::system(format!(
+                "Applied '{}' ({}) immediately. Harmony: {}/100 ({}).",
+                preset.name,
+                preset.description,
+                report.score,
+                report.grade()
+            )));
+        }
+        Err(error) => app.push_display_message(DisplayMessage::error(format!(
+            "Failed to save preset '{}': {error}",
+            preset.name
+        ))),
+    }
 }
 
 fn configured_palette() -> Palette {
@@ -184,6 +236,15 @@ fn generate_palette(app: &mut App, seed: Option<&str>) {
     }
 }
 
+fn persist_palette(palette: &Palette) -> anyhow::Result<()> {
+    persist(|colors| {
+        colors.clear();
+        for role in ALL_ROLES.iter().copied() {
+            colors.insert(role.key().to_string(), to_hex(palette.rgb(role)));
+        }
+    })
+}
+
 fn set_color(app: &mut App, role_key: &str, value: &str) {
     let Some(role) = Role::from_key(role_key) else {
         app.push_display_message(DisplayMessage::error(format!(
@@ -280,7 +341,9 @@ mod tests {
 
     #[test]
     fn usage_text_documents_every_subcommand() {
-        for subcommand in ["reset", "harmony", "export"] {
+        for subcommand in [
+            "preset", "presets", "reset", "harmony", "generate", "export",
+        ] {
             assert!(
                 USAGE.contains(subcommand),
                 "usage should document {subcommand}"

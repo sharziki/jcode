@@ -326,6 +326,49 @@ mod colors {
     }
 
     #[test]
+    fn presets_are_listed_and_apply_immediately() {
+        with_clean_config(|| {
+            let mut app = create_test_app();
+            assert!(dispatch_local_command(&mut app, "/colors presets"));
+            let output = last_message(&app);
+            for preset in jcode_tui_style::COLOR_PRESETS {
+                assert!(
+                    output.contains(preset.name),
+                    "missing {}: {output}",
+                    preset.name
+                );
+            }
+
+            assert!(dispatch_local_command(&mut app, "/colors preset sonic"));
+            let output = last_message(&app);
+            assert!(output.contains("Applied 'sonic'"), "{output}");
+            assert!(output.contains("/100"), "{output}");
+
+            let saved = crate::config::Config::load();
+            assert_eq!(saved.display.colors.len(), jcode_tui_style::ALL_ROLES.len());
+            for role in jcode_tui_style::ALL_ROLES.iter().copied() {
+                assert!(saved.display.colors.contains_key(role.key()));
+                assert!(jcode_tui_style::palette().is_overridden(role));
+            }
+        });
+    }
+
+    #[test]
+    fn unknown_or_missing_preset_does_not_touch_config() {
+        with_clean_config(|| {
+            let mut app = create_test_app();
+            for (input, expected) in [
+                ("/colors preset", "Missing preset name"),
+                ("/colors preset vaporwave", "Unknown color preset"),
+            ] {
+                assert!(dispatch_local_command(&mut app, input));
+                assert!(last_message(&app).contains(expected));
+            }
+            assert!(crate::config::Config::load().display.colors.is_empty());
+        });
+    }
+
+    #[test]
     fn bad_input_is_rejected_without_touching_the_config() {
         with_clean_config(|| {
             let mut app = create_test_app();
