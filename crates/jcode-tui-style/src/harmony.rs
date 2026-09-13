@@ -31,9 +31,11 @@ use crate::palette::{ALL_ROLES, Palette, Role, to_hex};
 mod generate;
 pub mod graph;
 mod measured;
+mod presets;
 pub use generate::generate_from_seed;
 pub use graph::{Topology, adjacent_separation, hue_concentration};
 use measured::{neighbour_separation, visual_variety};
+pub use presets::{COLOR_PRESETS, ColorPreset, find_color_preset};
 
 /// A color in the Oklab perceptual space.
 ///

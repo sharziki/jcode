@@ -712,6 +712,7 @@ impl App {
                 "/colors"
             };
             let mut suggestions: Vec<(String, &'static str)> = vec![
+                (format!("{base} presets"), "List built-in color presets"),
                 (
                     format!("{base} harmony"),
                     "Score the palette and list fixes",
@@ -723,6 +724,11 @@ impl App {
                 (format!("{base} reset"), "Reset every color to its default"),
                 (format!("{base} export"), "Print the palette as config TOML"),
             ];
+            suggestions.extend(
+                jcode_tui_style::COLOR_PRESETS
+                    .iter()
+                    .map(|preset| (format!("{base} preset {}", preset.name), preset.description)),
+            );
             suggestions.extend(
                 jcode_tui_style::ALL_ROLES
                     .iter()
