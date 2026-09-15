@@ -32,21 +32,31 @@ jcode pair
 Reachability is assumed to be Tailscale or LAN, exactly as for the iOS app. The
 gateway speaks plain HTTP; do not expose it to the public internet.
 
-### A note on HTTPS and service workers
+### A note on HTTPS, iOS, and service workers
 
-Browsers only register service workers on a secure origin. `localhost` counts as
-secure, but a bare Tailscale IP (`http://100.x.y.z:7643`) does not: there
-`window.isSecureContext` is `false` and `navigator.serviceWorker` is undefined
-entirely. The app guards registration, so on such an origin it still pairs,
-lists, and streams normally; only offline caching and the install prompt are
-unavailable. To get the full installable experience, put it behind TLS:
+Over a plain-HTTP origin that is not `localhost` (a Tailscale IP or MagicDNS
+name), `window.isSecureContext` is `false` and `navigator.serviceWorker` is
+undefined entirely. What that does and does not cost is worth being precise
+about, because it is easy to overstate:
+
+- **Still works:** the whole app. Pairing, the session list, attaching, live
+  streaming over the WebSocket, and **Add to Home Screen on iOS**, which grants
+  standalone full-screen mode from `apple-mobile-web-app-capable` and the touch
+  icon rather than from a service worker. Verified on `archlinux.tail883455.ts.net`.
+- **Lost:** offline shell caching, and Chrome/Android's install prompt, which
+  does require a secure origin and a registered worker.
+
+The client guards registration, so the absence degrades cleanly with no errors.
+
+If you want offline support and the Android install prompt, serve it over TLS:
 
 ```bash
 tailscale serve --bg 7643     # https://<machine>.<tailnet>.ts.net
 ```
 
-That origin is HTTPS with a real certificate, so the service worker registers and
-the install prompt appears.
+That needs HTTPS certs enabled for the tailnet (Admin console -> DNS -> enable
+HTTPS). Without it, `tailscale cert` fails with *"your Tailscale account does
+not support getting TLS certs"* and the plain-HTTP behavior above applies.
 
 ## Endpoints
 
@@ -165,6 +175,9 @@ described above: a session whose transcript was absent made the client retry
 about once a second indefinitely while showing "reconnecting", hiding the
 server's actual explanation.
 
-Note: a bare Tailscale IP over plain HTTP is not a secure context, so
-`navigator.serviceWorker` is undefined there and offline caching plus install
-are unavailable; the app itself still works. Use `tailscale serve` for HTTPS.
+Note: a plain-HTTP tailnet origin is not a secure context, so the service worker
+is unavailable there (offline caching and Android's install prompt are lost).
+The full app, including iOS Add to Home Screen, was verified working on
+`http://archlinux.tail883455.ts.net:7698/`: paired, listed 60 sessions, and ran
+a complete streamed turn (20 `text_delta` events, incremental growth, clean
+finish) over that exact origin.
