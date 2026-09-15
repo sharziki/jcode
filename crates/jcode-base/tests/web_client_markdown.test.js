@@ -250,6 +250,35 @@ test("underscores inside words do not italicize", () => {
   assert.ok(root.textContent.includes("some_long_name"));
 });
 
+test("backslash escapes render the literal character", () => {
+  // Found in a real transcript: reasoning summaries arrive wrapped as
+  // `*\u2063\\*\\*text\\*\\*\u2063*`. Without escape handling the backslashes
+  // leaked into the page and the surrounding emphasis mis-parsed, producing
+  // hundreds of stray <em> nodes showing literal "\\".
+  const root = render("\\*\\*not bold\\*\\*");
+  assert.strictEqual(root.count("strong"), 0, "escaped asterisks are not emphasis");
+  assert.strictEqual(root.count("em"), 0);
+  assert.ok(!root.textContent.includes("\\"), "no backslash reaches the page");
+  assert.ok(root.textContent.includes("**not bold**"), "literal asterisks shown");
+});
+
+test("escapes cover the common markdown punctuation", () => {
+  for (const ch of ["*", "_", "`", "[", "]", "(", ")", "#", "~", "\\"]) {
+    const root = render(`a \\${ch} b`);
+    assert.ok(
+      root.textContent.includes(`a ${ch} b`),
+      `escaped ${ch} should render literally`,
+    );
+  }
+});
+
+test("a real reasoning-summary wrapper renders cleanly", () => {
+  // Verbatim shape from the deployed server's transcript.
+  const root = render("*\u2063\\*\\*Verifying excluded lesson sections\\*\\*\u2063*");
+  assert.ok(!root.textContent.includes("\\"), "no stray backslashes");
+  assert.ok(root.textContent.includes("Verifying excluded lesson sections"));
+});
+
 test("inline code is not re-parsed as markdown", () => {
   const root = render("`**literal**`");
   assert.strictEqual(root.count("strong"), 0);
