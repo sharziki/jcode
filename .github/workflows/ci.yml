@@ -572,6 +572,31 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+  web-client:
+    name: Web client
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # The gateway's web client is plain JS embedded with include_bytes!, so
+      # `cargo test` only checks that the assets exist, not that the renderer
+      # works. It parses untrusted model output into DOM nodes, and two bugs in
+      # it silently ate message content, so it gets real tests. No install step:
+      # the suite uses node:test and a DOM shim, with no dependencies.
+      - name: Syntax check
+        run: node --check crates/jcode-base/src/gateway/web/app.js
+
+      - name: Service worker syntax check
+        run: node --check crates/jcode-base/src/gateway/web/sw.js
+
+      - name: Markdown renderer tests
+        run: node --test crates/jcode-base/tests/web_client_markdown.test.js
+
   typescript-sdk:
     name: TypeScript SDK
     runs-on: ubuntu-latest

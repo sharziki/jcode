@@ -108,7 +108,10 @@ mod tests {
         let (content_type, body) = lookup("/").expect("root asset");
         assert_eq!(content_type, "text/html; charset=utf-8");
         let html = String::from_utf8_lossy(body);
-        assert!(html.contains("manifest.webmanifest"), "shell links manifest");
+        assert!(
+            html.contains("manifest.webmanifest"),
+            "shell links manifest"
+        );
         assert!(html.contains("app.js"), "shell loads the client");
     }
 
@@ -124,7 +127,10 @@ mod tests {
             assert!(lookup(src).is_some(), "icon {src} is served");
         }
         let start_url = manifest["start_url"].as_str().expect("start_url");
-        assert!(lookup(start_url).is_some(), "start_url {start_url} is served");
+        assert!(
+            lookup(start_url).is_some(),
+            "start_url {start_url} is served"
+        );
     }
 
     #[test]
@@ -184,10 +190,11 @@ mod tests {
             if name.is_empty() {
                 continue;
             }
-            let on_disk = std::fs::read(dir.join(name))
-                .unwrap_or_else(|e| panic!("reading {name}: {e}"));
+            let on_disk =
+                std::fs::read(dir.join(name)).unwrap_or_else(|e| panic!("reading {name}: {e}"));
             assert_eq!(
-                asset.body, &on_disk[..],
+                asset.body,
+                &on_disk[..],
                 "embedded {} differs from the file on disk",
                 asset.path
             );
@@ -199,7 +206,9 @@ mod tests {
             let file_name = entry.file_name();
             let name = file_name.to_string_lossy();
             assert!(
-                ASSETS.iter().any(|a| a.path.trim_start_matches('/') == name),
+                ASSETS
+                    .iter()
+                    .any(|a| a.path.trim_start_matches('/') == name),
                 "{name} exists on disk but is not served; add it to ASSETS or delete it"
             );
         }

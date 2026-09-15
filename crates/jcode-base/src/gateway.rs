@@ -487,7 +487,9 @@ async fn handle_sessions_request(
                 .then(|| auth::parse_bearer_token(value.trim()))
         })
         .flatten();
-    let query_token = path.split_once('?').and_then(|(_, q)| auth::parse_query_token(q));
+    let query_token = path
+        .split_once('?')
+        .and_then(|(_, q)| auth::parse_query_token(q));
 
     let Some(token) = header_token.or(query_token) else {
         let body = serde_json::json!({"error": "Missing auth token"});

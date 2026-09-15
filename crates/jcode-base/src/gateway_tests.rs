@@ -204,7 +204,10 @@ fn test_web_assets_resolve_only_for_known_paths() {
         "/icon.svg",
         "/icon-192.png",
     ] {
-        assert!(super::web::lookup(path).is_some(), "{path} should be served");
+        assert!(
+            super::web::lookup(path).is_some(),
+            "{path} should be served"
+        );
     }
 
     // ...and nothing else is. `lookup` matches an explicit allowlist, so no
