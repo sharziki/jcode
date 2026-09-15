@@ -82,7 +82,7 @@ about, because it is easy to overstate:
 - **Still works:** the whole app. Pairing, the session list, attaching, live
   streaming over the WebSocket, and **Add to Home Screen on iOS**, which grants
   standalone full-screen mode from `apple-mobile-web-app-capable` and the touch
-  icon rather than from a service worker. Verified on `archlinux.tail883455.ts.net`.
+  icon rather than from a service worker. Verified on a real MagicDNS origin.
 - **Lost:** offline shell caching, and Chrome/Android's install prompt, which
   does require a secure origin and a registered worker.
 
@@ -166,7 +166,7 @@ the session you are already attached to, which is not enough to render a picker.
     {
       "id": "session_cat_1789478626270_67e4c2b55dbfd0a1",
       "title": "MA261 Quiz 3 scope correction",
-      "working_dir": "/home/sharziki",
+      "working_dir": "/home/you/projects/acme",
       "updated_at_ms": 1789487968748,
       "saved": false,
       "live": true
@@ -254,7 +254,7 @@ server's actual explanation.
 
 Note: a plain-HTTP tailnet origin is not a secure context, so the service worker
 is unavailable there (offline caching and Android's install prompt are lost).
-The full app, including iOS Add to Home Screen, was verified working on
-`http://archlinux.tail883455.ts.net:7698/`: paired, listed 60 sessions, and ran
-a complete streamed turn (20 `text_delta` events, incremental growth, clean
-finish) over that exact origin.
+The full app, including iOS Add to Home Screen, was verified working over a
+real `http://<machine>.<tailnet>.ts.net:<port>/` origin rather than localhost:
+paired, listed 60 sessions, and ran a complete streamed turn (20 `text_delta`
+events, incremental growth, clean finish) over that exact origin.
