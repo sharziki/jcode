@@ -424,34 +424,338 @@ function setPhase(phase, label) {
  * Text is inserted via textContent at every step, so server or model output
  * can never become live HTML.
  */
+/**
+ * Render markdown into `target`.
+ *
+ * Every text node is created with `textContent`, and no string is ever assigned
+ * to `innerHTML`, so model or server output can never execute as script. The
+ * supported subset matches what models actually emit: fenced and inline code,
+ * ATX headings, ordered/unordered/task lists, blockquotes, tables, horizontal
+ * rules, links, bold, italic, and strikethrough.
+ */
 function renderMarkdown(target, text) {
   target.textContent = "";
-  const segments = String(text).split(/```/);
-  segments.forEach((segment, index) => {
-    if (index % 2 === 1) {
+  for (const block of parseBlocks(String(text))) {
+    target.append(block);
+  }
+}
+
+/** Split source into block-level nodes. Fenced code is taken verbatim first. */
+function parseBlocks(text) {
+  const out = [];
+  const lines = text.split("\n");
+  let i = 0;
+
+  // Normalize heading depth against the shallowest heading present, so a
+  // message that starts at "###" still begins at h2 rather than skipping
+  // levels below the screen's h1.
+  let minHash = 7;
+  for (const line of lines) {
+    const h = line.match(/^(#{1,6})\s+\S/);
+    if (h) minHash = Math.min(minHash, h[1].length);
+  }
+  if (minHash === 7) minHash = 1;
+
+  const flushParagraph = (buf) => {
+    if (!buf.length) return;
+    const p = document.createElement("p");
+    // A single newline inside a paragraph is a soft break, as in chat UIs.
+    renderInline(p, buf.join("\n"));
+    out.push(p);
+    buf.length = 0;
+  };
+
+  const para = [];
+  while (i < lines.length) {
+    const line = lines[i];
+    const fence = line.match(/^\s*(```+|~~~+)\s*([\w+-]*)\s*$/);
+
+    if (fence) {
+      flushParagraph(para);
+      const marker = fence[1][0].repeat(3);
+      const lang = fence[2];
+      const body = [];
+      i += 1;
+      while (i < lines.length && !lines[i].trim().startsWith(marker)) {
+        body.push(lines[i]);
+        i += 1;
+      }
+      i += 1; // consume the closing fence (absent at EOF while streaming)
       const pre = document.createElement("pre");
       const code = document.createElement("code");
-      // Drop an opening language tag line ("```rust").
-      code.textContent = segment.replace(/^[a-zA-Z0-9_+-]*\n/, "");
+      if (lang) code.dataset.lang = lang;
+      code.textContent = body.join("\n");
       pre.append(code);
-      target.append(pre);
-      return;
+      out.push(pre);
+      continue;
     }
-    for (const piece of segment.split(/(`[^`\n]+`|\*\*[^*\n]+\*\*)/)) {
-      if (!piece) continue;
-      if (piece.startsWith("`") && piece.endsWith("`") && piece.length > 2) {
-        const code = document.createElement("code");
-        code.textContent = piece.slice(1, -1);
-        target.append(code);
-      } else if (piece.startsWith("**") && piece.endsWith("**") && piece.length > 4) {
-        const strong = document.createElement("strong");
-        strong.textContent = piece.slice(2, -2);
-        target.append(strong);
-      } else {
-        target.append(document.createTextNode(piece));
+
+    const heading = line.match(/^(#{1,6})\s+(.*)$/);
+    if (heading) {
+      flushParagraph(para);
+      // The screen title is the h1, so message headings start at h2 regardless
+      // of how many '#' the model used. Starting deeper skips a level
+      // (h1 -> h3) and breaks the document outline for screen readers.
+      // Relative depth is preserved, clamped at h6.
+      const level = Math.min(6, Math.max(2, heading[1].length - minHash + 2));
+      const h = document.createElement(`h${level}`);
+      renderInline(h, heading[2]);
+      out.push(h);
+      i += 1;
+      continue;
+    }
+
+    if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) {
+      flushParagraph(para);
+      out.push(document.createElement("hr"));
+      i += 1;
+      continue;
+    }
+
+    if (/^\s*>/.test(line)) {
+      flushParagraph(para);
+      const quoted = [];
+      while (i < lines.length && /^\s*>/.test(lines[i])) {
+        quoted.push(lines[i].replace(/^\s*>\s?/, ""));
+        i += 1;
       }
+      const bq = document.createElement("blockquote");
+      for (const node of parseBlocks(quoted.join("\n"))) bq.append(node);
+      out.push(bq);
+      continue;
     }
+
+    if (isTableStart(lines, i)) {
+      flushParagraph(para);
+      const rows = [];
+      while (i < lines.length && lines[i].includes("|") && lines[i].trim()) {
+        rows.push(lines[i]);
+        i += 1;
+      }
+      out.push(buildTable(rows));
+      continue;
+    }
+
+    if (/^\s*([-*+]|\d+[.)])\s+/.test(line)) {
+      flushParagraph(para);
+      const [list, next] = parseList(lines, i);
+      out.push(list);
+      i = next;
+      continue;
+    }
+
+    if (!line.trim()) {
+      flushParagraph(para);
+      i += 1;
+      continue;
+    }
+
+    para.push(line);
+    i += 1;
+  }
+  flushParagraph(para);
+  return out;
+}
+
+/** A table needs a header row and a `---|---` delimiter directly beneath it. */
+function isTableStart(lines, i) {
+  return (
+    lines[i].includes("|") &&
+    i + 1 < lines.length &&
+    /^\s*\|?[\s:-]*-[\s:|-]*\|?\s*$/.test(lines[i + 1]) &&
+    lines[i + 1].includes("-")
+  );
+}
+
+function splitRow(row) {
+  return row
+    .trim()
+    .replace(/^\||\|$/g, "")
+    .split("|")
+    .map((cell) => cell.trim());
+}
+
+function buildTable(rows) {
+  const table = document.createElement("table");
+  const aligns = splitRow(rows[1] || "").map((spec) => {
+    const left = spec.startsWith(":");
+    const right = spec.endsWith(":");
+    if (left && right) return "center";
+    if (right) return "right";
+    return left ? "left" : "";
   });
+
+  const thead = document.createElement("thead");
+  const hr = document.createElement("tr");
+  splitRow(rows[0]).forEach((cell, index) => {
+    const th = document.createElement("th");
+    if (aligns[index]) th.style.textAlign = aligns[index];
+    renderInline(th, cell);
+    hr.append(th);
+  });
+  thead.append(hr);
+  table.append(thead);
+
+  const tbody = document.createElement("tbody");
+  for (const row of rows.slice(2)) {
+    const tr = document.createElement("tr");
+    splitRow(row).forEach((cell, index) => {
+      const td = document.createElement("td");
+      if (aligns[index]) td.style.textAlign = aligns[index];
+      renderInline(td, cell);
+      tr.append(td);
+    });
+    tbody.append(tr);
+  }
+  table.append(tbody);
+  return table;
+}
+
+/**
+ * Parse one list, including nested lists and `- [ ]` task items.
+ * Returns the built element and the index of the first unconsumed line.
+ */
+function parseList(lines, start) {
+  const first = lines[start].match(/^(\s*)([-*+]|\d+[.)])\s+/);
+  const baseIndent = first[1].length;
+  const ordered = /\d/.test(first[2]);
+  const list = document.createElement(ordered ? "ol" : "ul");
+  if (ordered) {
+    const startNum = parseInt(first[2], 10);
+    if (startNum > 1) list.start = startNum;
+  }
+
+  let i = start;
+  let item = null;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (!line.trim()) {
+      // A blank line ends the list unless what follows is genuinely part of it:
+      // another marker at this level, or a line indented deeper than the marker.
+      // Comparing against `baseIndent` alone never terminated a top-level list
+      // (nothing is indented less than 0), so a blank line was swallowed along
+      // with every block after it.
+      const next = lines[i + 1] || "";
+      const continues =
+        next.trim() &&
+        (next.search(/\S/) > baseIndent ||
+          new RegExp(`^\\s{${baseIndent}}([-*+]|\\d+[.)])\\s+`).test(next));
+      if (!continues) break;
+      i += 1;
+      continue;
+    }
+    const indent = line.search(/\S/);
+    if (indent < baseIndent) break;
+
+    const marker = line.match(/^(\s*)([-*+]|\d+[.)])\s+(.*)$/);
+    if (marker && marker[1].length === baseIndent) {
+      // A bullet list and a numbered list are different lists even at the same
+      // indent. Without this, "- a" followed by "1. b" produced one <ul>
+      // containing both, silently losing the ordered list.
+      if (/\d/.test(marker[2]) !== ordered) break;
+      item = document.createElement("li");
+      let body = marker[3];
+      const task = body.match(/^\[([ xX])\]\s+(.*)$/);
+      if (task) {
+        // A bare checkbox has no accessible name. Wrapping it and the item text
+        // in a <label> gives screen readers "done: <text>" instead of an
+        // unlabelled control, and keeps the checked state meaningful.
+        const label = document.createElement("label");
+        const box = document.createElement("input");
+        box.type = "checkbox";
+        box.checked = task[1].toLowerCase() === "x";
+        box.disabled = true;
+        const span = document.createElement("span");
+        renderInline(span, task[2]);
+        label.append(box, span);
+        item.append(label);
+        item.classList.add("task");
+        list.append(item);
+        i += 1;
+        continue;
+      }
+      const span = document.createElement("span");
+      renderInline(span, body);
+      item.append(span);
+      list.append(item);
+      i += 1;
+      continue;
+    }
+    if (marker && marker[1].length > baseIndent) {
+      const [nested, next] = parseList(lines, i);
+      (item || list).append(nested);
+      i = next;
+      continue;
+    }
+    // Lazy continuation of the current item.
+    if (item) {
+      item.append(document.createTextNode(" "));
+      renderInline(item, line.trim());
+    }
+    i += 1;
+  }
+  return [list, i];
+}
+
+/**
+ * Inline spans: code, bold, italic, strikethrough, and links.
+ *
+ * Code is matched first and its contents are never re-parsed, so `**x**`
+ * inside backticks stays literal. Links only accept http/https/mailto to keep
+ * `javascript:` URLs out of the DOM.
+ */
+const INLINE_RE =
+  /(`[^`]+`)|(\*\*[^*]+\*\*|__[^_]+__)|(\*[^*\n]+\*|(?<![A-Za-z0-9_])_[^_\n]+_(?![A-Za-z0-9_]))|(~~[^~]+~~)|(\[[^\]\n]*\]\([^)\s]+\))|(https?:\/\/[^\s<>()]+)/g;
+
+function renderInline(target, text) {
+  let last = 0;
+  for (const m of String(text).matchAll(INLINE_RE)) {
+    if (m.index > last) {
+      target.append(document.createTextNode(text.slice(last, m.index)));
+    }
+    const [tok] = m;
+    if (m[1]) {
+      const code = document.createElement("code");
+      code.textContent = tok.slice(1, -1);
+      target.append(code);
+    } else if (m[2]) {
+      const strong = document.createElement("strong");
+      renderInline(strong, tok.slice(2, -2));
+      target.append(strong);
+    } else if (m[3]) {
+      const em = document.createElement("em");
+      renderInline(em, tok.slice(1, -1));
+      target.append(em);
+    } else if (m[4]) {
+      const del = document.createElement("del");
+      renderInline(del, tok.slice(2, -2));
+      target.append(del);
+    } else if (m[5]) {
+      const parts = tok.match(/^\[([^\]]*)\]\(([^)\s]+)\)$/);
+      target.append(buildLink(parts[2], parts[1] || parts[2]));
+    } else if (m[6]) {
+      target.append(buildLink(tok, tok));
+    }
+    last = m.index + tok.length;
+  }
+  if (last < text.length) {
+    target.append(document.createTextNode(text.slice(last)));
+  }
+}
+
+/** Build a link, or plain text when the scheme is not one we trust. */
+function buildLink(href, label) {
+  if (!/^(https?:|mailto:)/i.test(href)) {
+    return document.createTextNode(label);
+  }
+  const a = document.createElement("a");
+  a.href = href;
+  a.textContent = label;
+  a.target = "_blank";
+  // noopener/noreferrer: the opened page must not reach back via window.opener,
+  // and must not learn the gateway URL through a Referer.
+  a.rel = "noopener noreferrer";
+  return a;
 }
 
 /** True when the user is near the bottom, so we only autoscroll when following. */

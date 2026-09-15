@@ -3,10 +3,10 @@
   <head>
     <meta charset="utf-8" />
     <title>jcode</title>
-    <meta
-      name="viewport"
-      content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1"
-    />
+    <!-- No maximum-scale/user-scalable: blocking zoom locks out anyone who
+         needs to magnify text. The 16px input font already prevents iOS's
+         focus-zoom, which is the only reason to be tempted. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#0b0d0e" />
     <meta name="color-scheme" content="dark" />
     <meta name="mobile-web-app-capable" content="yes" />
@@ -20,7 +20,7 @@
   </head>
   <body>
     <!-- Pairing: shown until this browser holds a token for this server. -->
-    <section id="pair-view" class="view" hidden>
+    <main id="pair-view" class="view" hidden>
       <div class="pair-card">
         <div class="brand">
           <img src="/icon.svg" alt="" width="48" height="48" />
@@ -50,12 +50,12 @@
         <p id="pair-status" class="status" role="status"></p>
         <p class="muted small" id="pair-host"></p>
       </div>
-    </section>
+    </main>
 
     <!-- Session list. -->
-    <section id="sessions-view" class="view" hidden>
+    <main id="sessions-view" class="view" hidden>
       <header class="bar">
-        <span class="bar-title">Sessions</span>
+        <h1 class="bar-title">Sessions</h1>
         <div class="bar-actions">
           <button id="sessions-refresh" class="ghost" title="Refresh">Refresh</button>
           <button id="sessions-unpair" class="ghost danger" title="Forget this server">
@@ -63,7 +63,7 @@
           </button>
         </div>
       </header>
-      <ul id="session-list" class="session-list"></ul>
+      <ul id="session-list" class="session-list" aria-label="Sessions" tabindex="0"></ul>
       <!-- Shown only when the list is genuinely empty, so a new user sees an
            explanation instead of a blank screen. -->
       <div id="sessions-empty" class="empty" hidden>
@@ -74,16 +74,23 @@
         </p>
       </div>
       <p id="sessions-status" class="status" role="status"></p>
-    </section>
+    </main>
 
     <!-- Live session. -->
-    <section id="chat-view" class="view" hidden>
+    <main id="chat-view" class="view" hidden>
       <header class="bar">
         <button id="chat-back" class="ghost" aria-label="Back to sessions">&#8592;</button>
-        <span class="bar-title" id="chat-title">session</span>
+        <h1 class="bar-title" id="chat-title">session</h1>
         <span id="chat-phase" class="phase" data-phase="disconnected">offline</span>
       </header>
-      <div id="transcript" class="transcript" aria-live="polite"></div>
+      <div
+        id="transcript"
+        class="transcript"
+        aria-live="polite"
+        aria-label="Conversation"
+        role="log"
+        tabindex="0"
+      ></div>
       <div id="status-line" class="status-line" hidden></div>
       <form id="composer" class="composer">
         <textarea
@@ -95,7 +102,7 @@
         <button type="submit" id="composer-send" aria-label="Send">&#8593;</button>
         <button type="button" id="composer-stop" aria-label="Stop" hidden>&#9632;</button>
       </form>
-    </section>
+    </main>
 
     <script src="/app.js"></script>
   </body>
