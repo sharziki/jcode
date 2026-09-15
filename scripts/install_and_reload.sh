@@ -39,6 +39,23 @@ ln -sfn "../versions/$VERSION/jcode" "$BUILDS/shared-server/jcode"
 echo "$VERSION" > "$BUILDS/shared-server-version"
 
 echo "==> Reloading the daemon (live sessions are handed to the new process)"
+
+# Report what is genuinely live first. `active_pids` keeps a marker per session,
+# but markers outlive the process that wrote them, so a raw count overstates how
+# much work a reload actually has to carry.
+if [[ -d "$JCODE_HOME_DIR/active_pids" ]]; then
+  live=0
+  for marker in "$JCODE_HOME_DIR"/active_pids/*; do
+    [[ -e "$marker" ]] || continue
+    pid="$(cat "$marker" 2>/dev/null || true)"
+    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+      live=$((live + 1))
+      echo "    live: $(basename "$marker")"
+    fi
+  done
+  echo "    $live session(s) genuinely live"
+fi
+
 "$BIN" server reload
 
 # Verify against the real gateway rather than trusting the reload message.

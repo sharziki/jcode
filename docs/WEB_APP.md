@@ -60,6 +60,18 @@ work is preserved; `server stop --force` is only for a wedged daemon. Verify
 with `curl -s localhost:7643/health` and `curl -o /dev/null -w '%{http_code}'
 localhost:7643/` (expect `200`, and `401` from `/sessions` without a token).
 
+Before reloading, it is worth checking what is genuinely live, because
+`~/.jcode/active_pids` can hold stale markers for sessions whose owning process
+already exited:
+
+```bash
+for s in ~/.jcode/active_pids/*; do
+  pid=$(cat "$s"); kill -0 "$pid" 2>/dev/null && echo "live: $(basename "$s")"
+done
+```
+
+Only entries whose PID is still alive represent work a reload has to carry.
+
 ### A note on HTTPS, iOS, and service workers
 
 Over a plain-HTTP origin that is not `localhost` (a Tailscale IP or MagicDNS
