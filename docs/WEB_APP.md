@@ -32,6 +32,34 @@ jcode pair
 Reachability is assumed to be Tailscale or LAN, exactly as for the iOS app. The
 gateway speaks plain HTTP; do not expose it to the public internet.
 
+### Upgrading a running daemon onto this build
+
+`jcode server reload` alone is **not** enough when the new binary only exists in
+a repo checkout. The running server decides whether to reload by calling
+`server_has_newer_binary()`, which only considers installed channels
+(`~/.jcode/builds/shared-server`, then `stable`), never a repo `target/release`.
+Against an old daemon it therefore reports *"already running the newest binary;
+no reload needed"* and does nothing, so `/` keeps returning 404.
+
+Install the build into the shared-server channel first, then reload:
+
+```bash
+cargo build --release --bin jcode
+
+V=$(git rev-parse --short HEAD)
+mkdir -p ~/.jcode/builds/versions/"$V"
+cp target/release/jcode ~/.jcode/builds/versions/"$V"/jcode
+ln -sfn ../versions/"$V"/jcode ~/.jcode/builds/shared-server/jcode
+echo "$V" > ~/.jcode/builds/shared-server-version
+
+jcode server reload     # now reports "reloaded onto the newest binary"
+```
+
+Reload hands live sessions to the freshly exec'd server, so headless and swarm
+work is preserved; `server stop --force` is only for a wedged daemon. Verify
+with `curl -s localhost:7643/health` and `curl -o /dev/null -w '%{http_code}'
+localhost:7643/` (expect `200`, and `401` from `/sessions` without a token).
+
 ### A note on HTTPS, iOS, and service workers
 
 Over a plain-HTTP origin that is not `localhost` (a Tailscale IP or MagicDNS
