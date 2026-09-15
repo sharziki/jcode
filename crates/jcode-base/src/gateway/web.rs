@@ -158,6 +158,62 @@ mod tests {
         assert!(lookup("/nope").is_none());
     }
 
+    /// Every embedded asset must be byte-identical to the file on disk, and
+    /// every file in the asset directory must actually be served.
+    ///
+    /// `include_bytes!` bakes the assets into the binary at compile time, so a
+    /// stale build would serve an old client while the repo looks correct.
+    ///
+    /// Be precise about what this catches. Cargo tracks `include_bytes!` inputs
+    /// as rebuild dependencies (verified by touching an asset: `jcode-base`
+    /// recompiled), so the byte comparison cannot fail under `cargo test` —
+    /// editing an asset rebuilds this crate before the assertion runs. It is
+    /// kept as a cheap guard against an out-of-band build path that skips that
+    /// dependency tracking.
+    ///
+    /// The directory scan below is the half that genuinely bites, and it was
+    /// mutation-tested: adding an unwired `orphan.css` fails this test with an
+    /// actionable message.
+    #[test]
+    fn embedded_assets_match_the_files_on_disk() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/gateway/web");
+
+        for asset in ASSETS {
+            // "/" is an alias for index.html and has no file of its own.
+            let name = asset.path.trim_start_matches('/');
+            if name.is_empty() {
+                continue;
+            }
+            let on_disk = std::fs::read(dir.join(name))
+                .unwrap_or_else(|e| panic!("reading {name}: {e}"));
+            assert_eq!(
+                asset.body, &on_disk[..],
+                "embedded {} differs from the file on disk",
+                asset.path
+            );
+        }
+
+        // Anything shipped in the directory must actually be served, otherwise
+        // it is dead weight in the repo or a missing route.
+        for entry in std::fs::read_dir(&dir).expect("web asset dir").flatten() {
+            let file_name = entry.file_name();
+            let name = file_name.to_string_lossy();
+            assert!(
+                ASSETS.iter().any(|a| a.path.trim_start_matches('/') == name),
+                "{name} exists on disk but is not served; add it to ASSETS or delete it"
+            );
+        }
+    }
+
+    /// The root alias and `/index.html` must never drift apart.
+    #[test]
+    fn root_and_index_serve_identical_bytes() {
+        let (root_type, root) = lookup("/").expect("root");
+        let (index_type, index) = lookup("/index.html").expect("index");
+        assert_eq!(root, index);
+        assert_eq!(root_type, index_type);
+    }
+
     #[test]
     fn asset_response_has_well_formed_headers() {
         let response = asset_response("text/css; charset=utf-8", b"body{}");
