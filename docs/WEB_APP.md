@@ -98,6 +98,43 @@ That needs HTTPS certs enabled for the tailnet (Admin console -> DNS -> enable
 HTTPS). Without it, `tailscale cert` fails with *"your Tailscale account does
 not support getting TLS certs"* and the plain-HTTP behavior above applies.
 
+### Token handling
+
+The token is a bearer credential for your machine, so where it travels matters:
+
+- `/sessions` uses an `Authorization` header. `/ws` uses `?token=` only because
+  browsers cannot set headers on a WebSocket handshake.
+- The gateway logs the path with the query stripped. Verified by requesting
+  `/sessions?token=<64 chars>` and `/app.js?token=...` against a live gateway:
+  zero occurrences of the token in the logs, which recorded only
+  `Gateway HTTP: GET /sessions from 127.0.0.1:...`.
+- The client never puts the token in the URL, history, or title; only the
+  session id goes into the fragment. Credentials live in `localStorage`, keyed
+  by origin, so one browser can pair with several servers independently
+  (verified with three devices against one server).
+- Every asset the page loads is same-origin and relative, so no third party
+  ever receives a `Referer` that could carry a query string.
+
+Anyone who can read the URL of the WebSocket (a proxy that logs full URIs, for
+instance) can act as that device until it is revoked. List paired devices with
+`jcode pair --list` or `/remote status`, and remove one with
+`/remote revoke <device>` in the TUI; that device must pair again to reconnect.
+Revocation takes effect immediately, with no server restart, because both
+`/sessions` and the `/ws` handshake reload the registry from disk per request:
+verified by revoking a live device and watching `/sessions` go `200` -> `401`
+and the WebSocket handshake return `401 Unauthorized`. The web client treats
+that as fatal and returns to the pairing screen rather than retrying.
+
+The exposure is the same one the iOS app has, and the reason the gateway belongs
+on Tailscale or a LAN rather than the public internet.
+
+### Multiple devices
+
+Several clients may hold the same token and connect at once, and two clients may
+attach to the same session: verified with two concurrent WebSocket clients, both
+of which completed the handshake, received `history`, and stayed open. A phone
+and a laptop can therefore watch one conversation together.
+
 ## Endpoints
 
 The gateway serves all of these on one port:
