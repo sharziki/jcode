@@ -64,6 +64,15 @@
         </div>
       </header>
       <ul id="session-list" class="session-list"></ul>
+      <!-- Shown only when the list is genuinely empty, so a new user sees an
+           explanation instead of a blank screen. -->
+      <div id="sessions-empty" class="empty" hidden>
+        <img src="/icon.svg" alt="" width="40" height="40" />
+        <p class="empty-title">No sessions yet</p>
+        <p class="empty-hint">
+          Start one on your computer with <code>jcode</code>, then tap Refresh.
+        </p>
+      </div>
       <p id="sessions-status" class="status" role="status"></p>
     </section>
 

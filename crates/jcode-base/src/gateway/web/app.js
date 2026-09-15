@@ -89,6 +89,7 @@ const el = {
 
   sessionsView: $("sessions-view"),
   sessionList: $("session-list"),
+  sessionsEmpty: $("sessions-empty"),
   sessionsStatus: $("sessions-status"),
   sessionsRefresh: $("sessions-refresh"),
   sessionsUnpair: $("sessions-unpair"),
@@ -196,13 +197,15 @@ async function openSessions() {
   if (!creds) return openPairing();
   show(el.sessionsView);
   setStatus(el.sessionsStatus, "Loading sessions...");
+  // Hide the empty block while loading and on failure: "No sessions yet" would
+  // misreport a server we simply could not reach.
+  el.sessionsEmpty.hidden = true;
   try {
     const sessions = await fetchSessions(creds.token);
     renderSessions(sessions);
-    setStatus(
-      el.sessionsStatus,
-      sessions.length ? `${sessions.length} sessions` : "No sessions yet.",
-    );
+    // The empty block already explains the empty case; repeating it here would
+    // be redundant.
+    setStatus(el.sessionsStatus, sessions.length ? `${sessions.length} sessions` : "");
   } catch (error) {
     if (error.message === "unauthorized") {
       credentials.clear();
@@ -215,6 +218,11 @@ async function openSessions() {
 
 function renderSessions(sessions) {
   el.sessionList.textContent = "";
+  // An empty list is a legitimate state (a brand-new pairing), not a failure.
+  // Show an explanation instead of a blank screen, and let the empty block take
+  // the space so it centers rather than stranding text at the bottom.
+  el.sessionsEmpty.hidden = sessions.length > 0;
+  el.sessionList.style.flex = sessions.length ? "" : "0";
   for (const session of sessions) {
     const item = document.createElement("li");
 

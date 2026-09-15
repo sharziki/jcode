@@ -303,6 +303,40 @@ button.ghost.danger {
   padding: 0 14px calc(var(--safe-bottom) + 12px);
 }
 
+/* Empty state: centered in the list area, not stranded at the bottom. */
+.empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 32px 36px;
+  text-align: center;
+}
+
+.empty[hidden] {
+  display: none;
+}
+
+.empty img {
+  opacity: 0.45;
+  margin-bottom: 6px;
+}
+
+.empty-title {
+  margin: 0;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.empty-hint {
+  margin: 0;
+  font-size: 13.5px;
+  color: var(--text-3);
+  line-height: 1.6;
+}
+
 /* ------------------------------------------------------------- transcript */
 
 .transcript {
