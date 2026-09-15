@@ -681,9 +681,32 @@ Skills are not all loaded on startup. The conversation is embedded as a semantic
 
 ---
 
-## iOS Application / Native OpenClaw
+## Phone access
 
-A native iOS application version of jcode is coming soon. This will allow you to work with jcode on your personal machine's environment from your phone, via Tailscale. Openclaw like features will be bundled with this iOS application. 
+### Web app (available now)
+
+The gateway serves an installable web client, so any phone or laptop browser can
+drive your sessions over Tailscale or a LAN. No app store, no build step.
+
+```bash
+# ~/.jcode/config.toml
+[gateway]
+enabled = true
+port = 7643
+bind_addr = "0.0.0.0"   # reachable over Tailscale/LAN
+```
+
+Then run `jcode pair`, which prints a 6-digit code and the web app URL. Open it,
+enter the code, and **Add to Home Screen** for a full-screen app.
+
+It renders the live transcript (streaming text, reasoning, tool calls, and rich
+markdown), lists your sessions, and can send, interrupt, and stop a turn. The
+gateway speaks plain HTTP, so keep it on Tailscale or a LAN rather than the
+public internet. See [docs/WEB_APP.md](docs/WEB_APP.md).
+
+### iOS Application / Native OpenClaw
+
+A native iOS application version of jcode is coming soon. This will allow you to work with jcode on your personal machine's environment from your phone, via Tailscale. Openclaw like features will be bundled with this iOS application. It shares the gateway and wire protocol with the web app above, and adds push notifications and system integration.
 
 ---
 

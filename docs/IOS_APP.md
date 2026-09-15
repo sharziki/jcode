@@ -3,6 +3,11 @@
 > Status: v2 rebuild. Pure Swift. This replaces the earlier prototype and the
 > Rust-mobile-core/simulator direction, both removed in the `ios-app-restart`
 > branch history.
+>
+> A web client shipping the same capability is already available and needs no
+> Xcode or app store: see [WEB_APP.md](WEB_APP.md). The two are peers over the
+> same gateway and wire protocol. The web app reaches every device today; this
+> app adds push notifications and system integration.
 
 ## Product definition
 
