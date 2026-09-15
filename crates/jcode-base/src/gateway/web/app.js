@@ -274,6 +274,12 @@ const connection = {
   attempt: 0,
   timer: null,
   stopped: true,
+  /** Request id of the `subscribe` for the current socket. */
+  attachRequestID: null,
+  /** Set once the server accepts the attach, so retries can be distinguished. */
+  attached: false,
+  /** Reason the server refused to attach; retrying it can never succeed. */
+  fatalReason: null,
 
   start(token, sessionID) {
     this.stop();
@@ -281,6 +287,7 @@ const connection = {
     this.token = token;
     this.sessionID = sessionID;
     this.attempt = 0;
+    this.fatalReason = null;
     this.open();
   },
 
@@ -319,6 +326,8 @@ const connection = {
     socket.onopen = () => {
       this.attempt = 0;
       setPhase("connected");
+      this.attachRequestID = this.nextRequestID;
+      this.attached = false;
       this.send({ type: "subscribe", target_session_id: this.sessionID });
       this.send({ type: "get_history" });
     };
@@ -347,6 +356,15 @@ const connection = {
         setPhase("failed", "unpaired");
         credentials.clear();
         openPairing("This device is no longer paired. Enter a new code.");
+        return;
+      }
+      // The server refused the attach and then closed. Reconnecting replays the
+      // same rejected subscribe forever, which looks like a flaky network and
+      // hides an error the server already explained. Stop and say why.
+      if (this.fatalReason) {
+        setPhase("failed", "unavailable");
+        addMessage("error", this.fatalReason);
+        setStatusLine("");
         return;
       }
       this.scheduleReconnect();
@@ -560,6 +578,9 @@ function finishTool(id, name, output, error) {
 function handleEvent(event) {
   switch (event.type) {
     case "history":
+      // History only arrives once the server accepted the attach.
+      connection.attached = true;
+      connection.fatalReason = null;
       renderHistory(event);
       break;
 
@@ -636,6 +657,12 @@ function handleEvent(event) {
     case "error":
       endStreaming();
       setProcessing(false);
+      // An error answering the attach means this session cannot be opened at
+      // all (e.g. its transcript is gone). Record it so the close that follows
+      // reports the reason instead of reconnecting forever.
+      if (!connection.attached && event.id === connection.attachRequestID) {
+        connection.fatalReason = event.message || "This session could not be opened.";
+      }
       addMessage("error", event.message || "Server error");
       break;
 
@@ -748,7 +775,12 @@ function sendMessage() {
   if (!content) return;
   if (view.processing) {
     // Mid-turn input becomes a soft interrupt, matching the TUI.
-    if (!connection.send({ type: "soft_interrupt", content, urgent: false })) return;
+    if (!connection.send({ type: "soft_interrupt", content, urgent: false })) {
+      // Keep the text in the composer: silently dropping it loses the user's
+      // words with no explanation.
+      addMessage("error", "Not connected. Message not sent.");
+      return;
+    }
     addMessage("user", content);
   } else {
     if (!connection.send({ type: "message", content })) {

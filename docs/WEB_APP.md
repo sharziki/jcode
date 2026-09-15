@@ -127,8 +127,16 @@ unknown event types are ignored so a newer server never breaks an older client.
 - Reconnect uses capped exponential backoff (max 30s), reconnects eagerly after
   a `reloading` event, and stops entirely on a 401 or `session_close_requested`
   because retrying either can never succeed.
+- **A server error answering the attach is fatal for that session.** If the
+  server refuses the `subscribe` (for example the session's transcript is gone,
+  so it has no working directory) it sends an `error` and closes. Reconnecting
+  would replay the same rejected subscribe about once a second forever, which
+  looks like a flaky network while hiding a reason the server already gave. The
+  client records that reason and reports it instead of retrying.
 - A 401 anywhere clears the token and returns to pairing with an explanation.
 - Sending while a turn is in flight becomes a `soft_interrupt`, matching the TUI.
+  If either send cannot reach the server, the text stays in the composer and the
+  failure is shown rather than silently dropping the user's words.
 - Returning to a backgrounded tab reconnects, since mobile browsers drop sockets.
 
 ## Verification
@@ -137,10 +145,26 @@ unknown event types are ignored so a newer server never breaks an older client.
 consistency, PNG validity, path-escape rejection, and `?limit=` clamping.
 
 Verified end to end in a real browser at a 390x844 mobile viewport against a
-live gateway: pairing through the form, the session list (60 sessions, live
-badges, relative times), attaching over WebSocket and rendering 146 messages of
-real history, `message`/`soft_interrupt`/`cancel` wire frames, code/bold/tool
-rendering with an injection payload staying inert text, `Page.getAppManifest`
-reporting zero installability errors, service worker precaching the shell and
-serving it with the network disabled, and both unpair and revoked-token paths
-returning to the pairing screen.
+live gateway running the **release** binary: pairing through the form, the
+session list (60 sessions, live badges, relative times), attaching over
+WebSocket and rendering 146 messages of real history, code/bold/tool rendering
+with an injection payload staying inert text, `Page.getAppManifest` reporting
+zero installability errors, service worker precaching the shell and serving it
+with the network disabled, and both unpair and revoked-token paths returning to
+the pairing screen. Three devices paired independently against one server.
+
+A genuine streamed turn was observed rather than simulated: 10 `text_delta`
+events over the socket, assistant text growing incrementally (4 -> 30 chars),
+the streaming caret visible during and cleared after, and `message_end`
+returning the composer to idle. Stop was exercised mid-stream (server confirmed
+`interrupted`), and typing mid-turn was confirmed to reach the server as
+`soft_interrupt_injected`.
+
+That real-turn test is also what caught the attach-failure reconnect loop
+described above: a session whose transcript was absent made the client retry
+about once a second indefinitely while showing "reconnecting", hiding the
+server's actual explanation.
+
+Note: a bare Tailscale IP over plain HTTP is not a secure context, so
+`navigator.serviceWorker` is undefined there and offline caching plus install
+are unavailable; the app itself still works. Use `tailscale serve` for HTTPS.
