@@ -168,3 +168,57 @@ fn test_authorize_ws_device_rejects_unknown_and_revoked_with_401() {
         auth::authorize_ws_device(&registry, &token).expect_err("revoked token must be rejected");
     assert_eq!(err.status(), 401);
 }
+
+// ---------------------------------------------------------------------------
+// Web client routing
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_sessions_limit_is_clamped_to_a_safe_range() {
+    use super::parse_limit_param;
+
+    // A missing or unparseable limit still returns a useful page of sessions.
+    assert_eq!(parse_limit_param("/sessions"), 50);
+    assert_eq!(parse_limit_param("/sessions?limit=abc"), 50);
+    assert_eq!(parse_limit_param("/sessions?other=3"), 50);
+
+    assert_eq!(parse_limit_param("/sessions?limit=10"), 10);
+    assert_eq!(parse_limit_param("/sessions?foo=1&limit=25"), 25);
+
+    // A client must never be able to walk an entire install in one request,
+    // and zero would return an empty list the user cannot act on.
+    assert_eq!(parse_limit_param("/sessions?limit=100000"), 500);
+    assert_eq!(parse_limit_param("/sessions?limit=0"), 1);
+}
+
+#[test]
+fn test_web_assets_resolve_only_for_known_paths() {
+    // The app shell and its dependencies are served...
+    for path in [
+        "/",
+        "/index.html",
+        "/app.js",
+        "/app.css",
+        "/sw.js",
+        "/manifest.webmanifest",
+        "/icon.svg",
+        "/icon-192.png",
+    ] {
+        assert!(super::web::lookup(path).is_some(), "{path} should be served");
+    }
+
+    // ...and nothing else is. `lookup` matches an explicit allowlist, so no
+    // request path can ever escape into the filesystem.
+    for path in [
+        "/../Cargo.toml",
+        "/../../etc/passwd",
+        "/app.js/../../secret",
+        "/sessions",
+        "/ws",
+    ] {
+        assert!(
+            super::web::lookup(path).is_none(),
+            "{path} must not resolve to an asset"
+        );
+    }
+}

@@ -26,6 +26,7 @@ use crate::logging;
 mod auth;
 pub mod control;
 mod registry;
+mod web;
 use auth::{
     AuthorizedDevice, WsAuth, WsAuthSource, authorize_ws_device, extract_ws_auth, ws_error_response,
 };
@@ -339,6 +340,8 @@ fn http_response(status: u16, status_text: &str, body: &str) -> Vec<u8> {
 /// Supports:
 ///   GET  /health  - server status
 ///   POST /pair    - exchange pairing code for auth token
+///   GET  /sessions - recent session metadata (token required)
+///   GET  /, /app.js, ... - embedded web client (PWA)
 ///   OPTIONS *     - CORS preflight
 async fn handle_http(
     mut tcp_stream: tokio::net::TcpStream,
@@ -430,11 +433,26 @@ async fn handle_http(
             handle_pair_request(body_str, &registry).await
         }
 
+        // Recent sessions, so the web client can show a picker before it opens
+        // a socket. The WebSocket protocol only reports session IDs for the
+        // session you are already attached to, which is not enough to choose.
+        ("GET", "/sessions") => handle_sessions_request(&headers_text, path, &registry).await,
+
         ("OPTIONS", _) => {
             // CORS preflight
             "HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type, Authorization\r\nAccess-Control-Max-Age: 86400\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
             .to_string().into_bytes()
         }
+
+        // The embedded web client. Served last so a future API route always
+        // wins over a same-named asset.
+        ("GET", _) => match web::lookup(path_base) {
+            Some((content_type, body)) => web::asset_response(content_type, body),
+            None => {
+                let body = serde_json::json!({"error": "Not found"});
+                http_response(404, "Not Found", &body.to_string())
+            }
+        },
 
         _ => {
             let body = serde_json::json!({"error": "Not found"});
@@ -445,6 +463,95 @@ async fn handle_http(
     tcp_stream.write_all(&response).await?;
     tcp_stream.shutdown().await?;
     Ok(())
+}
+
+/// Handle `GET /sessions`: recent session metadata for a paired client.
+///
+/// Authenticated with the same bearer token as the WebSocket. Browsers cannot
+/// set headers on a WebSocket handshake but can on `fetch`, so the header is
+/// preferred here and the `?token=` fallback exists only for parity.
+///
+/// Data comes from the durable recent-session index rather than reading every
+/// transcript: an install can hold 100k+ sessions and a phone must not wait on
+/// that. Liveness comes from the active-PID directory.
+async fn handle_sessions_request(
+    headers: &str,
+    path: &str,
+    registry: &Arc<tokio::sync::RwLock<DeviceRegistry>>,
+) -> Vec<u8> {
+    let header_token = headers
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("authorization")
+                .then(|| auth::parse_bearer_token(value.trim()))
+        })
+        .flatten();
+    let query_token = path.split_once('?').and_then(|(_, q)| auth::parse_query_token(q));
+
+    let Some(token) = header_token.or(query_token) else {
+        let body = serde_json::json!({"error": "Missing auth token"});
+        return http_response(401, "Unauthorized", &body.to_string());
+    };
+    if !auth::is_valid_hex_token(token) {
+        let body = serde_json::json!({"error": "Malformed auth token"});
+        return http_response(401, "Unauthorized", &body.to_string());
+    }
+
+    {
+        // Reload from disk so a device paired or revoked since startup is seen.
+        let mut reg = registry.write().await;
+        *reg = DeviceRegistry::load();
+        if reg.validate_token(token).is_none() {
+            let body =
+                serde_json::json!({"error": "Unknown or revoked auth token; re-pair this device"});
+            return http_response(401, "Unauthorized", &body.to_string());
+        }
+        reg.touch_device(token);
+    }
+
+    let limit = parse_limit_param(path);
+    let live: std::collections::HashSet<String> =
+        jcode_storage::active_session_ids().into_iter().collect();
+
+    let sessions: Vec<serde_json::Value> = crate::recent_session_index::recent(limit)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|entry| {
+            serde_json::json!({
+                "id": entry.session_id,
+                "title": entry.display_title(),
+                "working_dir": entry.working_dir,
+                "updated_at_ms": entry.last_active_at_ms.unwrap_or(entry.updated_at_ms),
+                "saved": entry.saved,
+                "live": live.contains(&entry.session_id),
+            })
+        })
+        .collect();
+
+    let body = serde_json::json!({ "sessions": sessions });
+    http_response(200, "OK", &body.to_string())
+}
+
+/// Clamp of the `?limit=` query parameter for `/sessions`.
+///
+/// A client-supplied limit must never let one request walk an entire install's
+/// session history, and a missing or junk value must still return something
+/// useful rather than nothing.
+fn parse_limit_param(path: &str) -> usize {
+    const DEFAULT_LIMIT: usize = 50;
+    const MAX_LIMIT: usize = 500;
+    path.split_once('?')
+        .map(|(_, query)| query)
+        .and_then(|query| {
+            query.split('&').find_map(|param| {
+                param
+                    .strip_prefix("limit=")
+                    .and_then(|value| value.parse::<usize>().ok())
+            })
+        })
+        .unwrap_or(DEFAULT_LIMIT)
+        .clamp(1, MAX_LIMIT)
 }
 
 /// Handle POST /pair request.

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="jcode">
+  <!-- Shell prompt mark, matching ios AppIcon.png: mint chevron + cursor on near-black. -->
+  <rect width="512" height="512" rx="114" fill="#0f0f14" />
+  <g
+    fill="none"
+    stroke="#4DD9A6"
+    stroke-width="54"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  >
+    <path d="M150 168 L246 262 L150 356" />
+    <path d="M300 356 L390 356" />
+  </g>
+</svg>

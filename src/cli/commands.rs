@@ -1878,7 +1878,7 @@ pub fn run_pair_command(list: bool, revoke: Option<String>) -> Result<()> {
     );
 
     eprintln!();
-    eprintln!("  \x1b[1mScan with the jcode iOS app:\x1b[0m\n");
+    eprintln!("  \x1b[1mScan with the jcode iOS app, or open the web app below:\x1b[0m\n");
     match crate::login_qr::render_unicode_qr(&pair_uri) {
         Ok(qr) => {
             for line in qr.lines() {
@@ -1899,6 +1899,12 @@ pub fn run_pair_command(list: bool, revoke: Option<String>) -> Result<()> {
     if connect_host != gw_config.bind_addr {
         eprintln!("  Bind address:  \x1b[2m{}\x1b[0m", bind_hint);
     }
+    // The gateway serves an installable web client at the same address, so any
+    // phone can pair without waiting on an app store build.
+    eprintln!(
+        "  Web app:       \x1b[36mhttp://{}/\x1b[0m \x1b[2m(open, enter the code, Add to Home Screen)\x1b[0m",
+        resolved_hint
+    );
 
     if connect_host == gateway::UNKNOWN_CONNECT_HOST {
         eprintln!(

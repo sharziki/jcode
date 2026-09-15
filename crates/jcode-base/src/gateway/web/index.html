@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>jcode</title>
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1"
+    />
+    <meta name="theme-color" content="#0b0d0e" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="jcode" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/icon-192.png" />
+    <link rel="stylesheet" href="/app.css" />
+  </head>
+  <body>
+    <!-- Pairing: shown until this browser holds a token for this server. -->
+    <section id="pair-view" class="view" hidden>
+      <div class="pair-card">
+        <div class="brand">
+          <img src="/icon.svg" alt="" width="48" height="48" />
+          <h1>jcode</h1>
+        </div>
+        <p class="muted">
+          Run <code>jcode pair</code> on your server, then enter the 6-digit code.
+        </p>
+        <form id="pair-form" autocomplete="off">
+          <input
+            id="pair-code"
+            inputmode="numeric"
+            pattern="[0-9]*"
+            maxlength="6"
+            placeholder="000000"
+            aria-label="Pairing code"
+            required
+          />
+          <input
+            id="device-name"
+            type="text"
+            placeholder="Device name"
+            aria-label="Device name"
+          />
+          <button type="submit" id="pair-submit">Pair this device</button>
+        </form>
+        <p id="pair-status" class="status" role="status"></p>
+        <p class="muted small" id="pair-host"></p>
+      </div>
+    </section>
+
+    <!-- Session list. -->
+    <section id="sessions-view" class="view" hidden>
+      <header class="bar">
+        <span class="bar-title">Sessions</span>
+        <div class="bar-actions">
+          <button id="sessions-refresh" class="ghost" title="Refresh">Refresh</button>
+          <button id="sessions-unpair" class="ghost danger" title="Forget this server">
+            Unpair
+          </button>
+        </div>
+      </header>
+      <ul id="session-list" class="session-list"></ul>
+      <p id="sessions-status" class="status" role="status"></p>
+    </section>
+
+    <!-- Live session. -->
+    <section id="chat-view" class="view" hidden>
+      <header class="bar">
+        <button id="chat-back" class="ghost" aria-label="Back to sessions">&#8592;</button>
+        <span class="bar-title" id="chat-title">session</span>
+        <span id="chat-phase" class="phase" data-phase="disconnected">offline</span>
+      </header>
+      <div id="transcript" class="transcript" aria-live="polite"></div>
+      <div id="status-line" class="status-line" hidden></div>
+      <form id="composer" class="composer">
+        <textarea
+          id="composer-input"
+          rows="1"
+          placeholder="Message jcode"
+          aria-label="Message"
+        ></textarea>
+        <button type="submit" id="composer-send" aria-label="Send">&#8593;</button>
+        <button type="button" id="composer-stop" aria-label="Stop" hidden>&#9632;</button>
+      </form>
+    </section>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
