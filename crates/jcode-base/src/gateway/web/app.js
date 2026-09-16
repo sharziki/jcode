@@ -213,7 +213,7 @@ function renderSessions() {
   el.sessionList.textContent = "";
   el.sessionsEmpty.hidden = visible.length > 0;
   if (!visible.length) {
-    setStatus(el.sessionsEmpty, sessions.length ? "No conversations match. Clear search or project filters, or show all conversations." : "No conversations yet. Start a new chat below.");
+    setStatus(el.sessionsEmpty, sessions.length ? "No matching conversations. Clear search or project filters, or show all conversations." : "No conversations yet. Start a new chat below.");
   }
   let previousGroup = "";
   for (const session of visible) {
@@ -938,7 +938,7 @@ function updateComposer() {
   el.composerStop.hidden = !view.processing;
   el.composerStop.disabled = !attached || view.stopping;
   el.chatView.dataset.processing = String(view.processing);
-  if ($("composer-model-name")) $("composer-model-name").textContent = view.model || "Choose model";
+  if ($("composer-model-name")) $("composer-model-name").textContent = modelLabel(view.model) || "Choose model";
   if ($("composer-project-name")) $("composer-project-name").textContent = shortPath(workingDir).split("/").pop() || shortPath(workingDir) || "Choose project";
   if ($("composer-project")) $("composer-project").disabled = Boolean(connection.sessionID);
   setStatus($("composer-hint"), view.stopping ? "Stopping…" : view.processing ? "You can send a follow-up while Jcode works." : "");
@@ -995,6 +995,14 @@ function updateCatalog(event) {
   }
   renderModels(); updateComposer();
 }
+function modelLabel(id) {
+  const raw = String(id || "");
+  const claude = raw.match(/^claude-(opus|sonnet|haiku)-(\d+)(?:[.-](\d{1,2}))?(?:-\d{8})?$/i);
+  if (claude) return `Claude ${claude[1][0].toUpperCase()}${claude[1].slice(1).toLowerCase()} ${claude[2]}${claude[3] ? "." + claude[3] : ""}`;
+  const gpt = raw.match(/^gpt-(\d+(?:\.\d+)?)(?:-(astra|luna|mini|nano|pro))?(?:-\d{4}-\d{2}-\d{2})?$/i);
+  if (gpt) return `GPT-${gpt[1]}${gpt[2] ? " " + gpt[2][0].toUpperCase() + gpt[2].slice(1).toLowerCase() : ""}`;
+  return raw;
+}
 function renderModels() {
   const list = $("model-list"); if (!list) return;
   list.textContent = "";
@@ -1004,9 +1012,9 @@ function renderModels() {
     const button = document.createElement("button"); button.type = "button"; button.className = "model-option";
     button.disabled = !connection.attached || !model.available || Boolean(view.modelRequest);
     button.setAttribute("aria-pressed", String(model.model === view.model));
-    const name = document.createElement("span"); name.textContent = model.model;
-    const provider = document.createElement("span"); provider.className = "model-provider"; provider.textContent = model.provider;
-    button.append(name); if (model.provider) button.append(provider); button.addEventListener("click", () => selectModel(model.model)); list.append(button);
+    const name = document.createElement("span"); name.textContent = modelLabel(model.model);
+    const provider = document.createElement("span"); provider.className = "model-provider"; provider.textContent = [model.provider, modelLabel(model.model) !== model.model ? model.model : ""].filter(Boolean).join(" · ");
+    button.append(name); if (provider.textContent) button.append(provider); button.addEventListener("click", () => selectModel(model.model)); list.append(button);
   }
   if (!view.modelRequest) setStatus($("model-status"), models.length ? "" : connection.attached ? "No matching models are available from this server." : "Connect to load available models.");
 }

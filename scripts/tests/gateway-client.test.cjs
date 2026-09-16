@@ -177,7 +177,7 @@ test('directory refresh is nonoverlapping, visible-only and keeps unknown-count 
   assert.equal(h.run('filteredSessions().length'), 1); assert.equal(h.run('filteredSessions()[0].id'), 'legacy');
   assert.equal(h.run('workingDir'), '/home/test/project');
   h.run('showAll=true; renderSessions()'); assert.equal(h.run('filteredSessions().length'), 2);
-  h.nodes.get('session-search').value = 'nothing'; h.run('renderSessions()'); assert.match(h.nodes.get('sessions-empty').textContent, /No conversations match/);
+  h.nodes.get('session-search').value = 'nothing'; h.run('renderSessions()'); assert.match(h.nodes.get('sessions-empty').textContent, /No matching conversations/);
   h.document.visibilityState = 'hidden'; await h.run('refreshSessions()'); assert.equal(h.fetches(), before + 1);
 });
 
@@ -278,4 +278,16 @@ test('first prompt titles old-server chats until authoritative directory title a
   h.run('view.renameRequest=999');
   h.setFetch(async () => ({ ok: true, json: async () => ({ sessions: [{ id: 'session-one', title: 'Stale title' }] }) }));
   await h.run('refreshSessions()'); assert.equal(h.nodes.get('chat-title').textContent, 'Server-generated title');
+});
+
+test('readable known-model labels retain raw server IDs for switching and details', async () => {
+  const h = harness(); await h.attach();
+  for (const [raw, label] of [['gpt-6-astra', 'GPT-6 Astra'], ['gpt-5.6-luna', 'GPT-5.6 Luna'], ['claude-opus-4-6', 'Claude Opus 4.6'], ['claude-sonnet-4-20250514', 'Claude Sonnet 4'], ['unrecognized-vendor-id', 'unrecognized-vendor-id']]) {
+    h.context.rawModel = raw; assert.equal(h.run('modelLabel(rawModel)'), label);
+  }
+  h.event({ type: 'available_models_updated', provider_model: 'gpt-6-astra', available_models: ['gpt-6-astra'] });
+  assert.equal(h.nodes.get('composer-model-name').textContent, 'GPT-6 Astra');
+  assert.equal(h.nodes.get('model-list').children[0].children[1].textContent, 'gpt-6-astra');
+  await h.nodes.get('model-list').children[0].emit('click');
+  assert.equal(h.sockets.at(-1).sent.at(-1).model, 'gpt-6-astra');
 });
