@@ -1158,15 +1158,28 @@ function usePromptTitle(content) {
 function renderHistory(event, preservePosition = false) {
   const pinned = isPinnedToBottom(); const scrollTop = el.transcript.scrollTop;
   const pending = draftRecord().pending || [];
+  const previousTools = new Map(view.tools);
   resetView();
   usePromptTitle((event.messages || []).find((m) => m.role === "user" && m.content)?.content);
   el.chatTitle.textContent = event.display_title || view.knownTitle || "New conversation";
   const users = [];
-  for (const message of event.messages || []) {
+  for (const [index, message] of (event.messages || []).entries()) {
+    // Native persisted tool results have role=tool, output in content, and call metadata in tool_data.
+    // Handle them before the prose-role filter rather than dropping them at reconciliation.
+    if (message.tool_data || message.role === "tool") {
+      const data = message.tool_data || {};
+      const id = data.id || `history-tool-${index}`;
+      const record = startTool(id, data.name || "Tool");
+      record.input = typeof data.input === "string" ? data.input : JSON.stringify(data.input ?? {});
+      finishTool(id, data.name || "Tool", message.content || data.output || "", data.error);
+      const previous = previousTools.get(id);
+      record.node.open = previous?.node.open || false;
+      if (previous?.status.textContent === "Failed") { record.status.textContent = "Failed"; record.node.classList.add("failed"); }
+      continue;
+    }
     if (message.role !== "user" && message.role !== "assistant") continue;
     if (message.content) addMessage(message.role, message.content);
     if (message.role === "user") users.push(message.content);
-    if (message.tool_data) { const d = message.tool_data; startTool(d.id, d.name); finishTool(d.id, d.name, d.output, d.error); }
   }
   // Reconcile only the post-send portion of history, so an older identical prompt is not an ACK.
   for (const p of pending) {

@@ -355,3 +355,22 @@ test('failed external turns reconcile missing user prompts and retain the termin
   assert.match(h.nodes.get('transcript').textContent, /External provider failed/);
   assert.equal(h.run('view.processing'), false); assert.equal(h.run('connection.syncError'), null);
 });
+
+test('native role=tool history reconstructs output disclosures after completion and reload', async () => {
+  const h = harness(); await h.attach();
+  h.event({ type: 'tool_start', id: 'bash-1', name: 'bash' });
+  h.event({ type: 'tool_done', id: 'bash-1', name: 'bash', output: '/home/test/project' });
+  h.run("view.tools.get('bash-1').node.open=true");
+  h.event({ type: 'done', id: 987654321 }); const request = h.sockets.at(-1).sent.at(-1);
+  const messages = [{ role: 'user', content: 'Run pwd' }, { role: 'tool', content: '/home/test/project', tool_data: { id: 'bash-1', name: 'bash', input: { command: 'pwd' } } }, { role: 'assistant', content: 'Your project directory.' }];
+  h.event({ type: 'history', id: request.id, session_id: 'session-one', messages, activity: { is_processing: false } });
+  assert.equal(h.run("el.transcript.querySelectorAll('.trace.tool').length"), 1);
+  assert.equal(h.run("view.tools.get('bash-1').body.textContent"), '/home/test/project');
+  assert.equal(h.run("view.tools.get('bash-1').node.open"), true);
+  assert.equal(h.run("el.transcript.querySelectorAll('.msg.user').length"), 1);
+  assert.equal(h.run("el.transcript.querySelectorAll('.msg.assistant').length"), 1);
+  const reloaded = harness({ saved: h.saved, hash: '#session-one' }); reloaded.sockets.at(-1).connect();
+  reloaded.event({ type: 'history', id: reloaded.run('connection.historyRequestID'), session_id: 'session-one', messages });
+  assert.equal(reloaded.run("view.tools.get('bash-1').body.textContent"), '/home/test/project');
+  assert.equal(reloaded.run("view.tools.get('bash-1').node.open"), false);
+});
