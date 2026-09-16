@@ -423,3 +423,33 @@ test("unknown latex is left intact rather than dropped", () => {
   const root = render("\\(\\weirdcommand{z}\\)");
   assert.ok(root.textContent.includes("weirdcommand") || root.textContent.includes("z"));
 });
+
+test("bare-bracket display math is recognized", () => {
+  // Models emit the unescaped form far more often than `\[`: 118 vs 12
+  // occurrences across 20 real sessions on a live install.
+  const root = render("text\n\n[\n\\mathbf r\\cdot\\mathbf v=0.\n]\n\nmore");
+  const block = root.children.find((c) => c.classList.contains("math-display"));
+  assert.ok(block, "bare [ ... ] becomes a math block");
+  assert.ok(!root.textContent.includes("mathbf"), "commands are consumed");
+  assert.ok(block.textContent.includes("\u22c5"), "\\cdot becomes a dot operator");
+  assert.ok(root.textContent.includes("text") && root.textContent.includes("more"));
+});
+
+test("a markdown link is never mistaken for display math", () => {
+  // `[label](url)` shares the opening bracket; only a lone `[` line is math.
+  const root = render("see [the docs](https://example.com) now");
+  assert.strictEqual(root.count("a"), 1);
+  assert.strictEqual(
+    root.children.filter((c) => c.classList.contains("math-display")).length,
+    0,
+  );
+});
+
+test("a bracketed line with other content is left as text", () => {
+  const root = render("[not math] trailing words");
+  assert.strictEqual(
+    root.children.filter((c) => c.classList.contains("math-display")).length,
+    0,
+  );
+  assert.ok(root.textContent.includes("not math"));
+});

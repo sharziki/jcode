@@ -505,15 +505,24 @@ function parseBlocks(text) {
       continue;
     }
 
-    // Display math: `\[ ... \]` on its own lines, centered as a block.
-    if (/^\s*\\\[/.test(line)) {
+    // Display math, centered as a block.
+    //
+    // Both `\[ ... \]` and a bare `[ ... ]` on its own line: models emit the
+    // unescaped form far more often (118 vs 12 occurrences across 20 real
+    // sessions here), and a lone `[` cannot be a markdown link, so treating it
+    // as math is unambiguous. A line with other content is left alone.
+    if (/^\s*(\\\[|\[)\s*$/.test(line) || /^\s*\\\[/.test(line)) {
       flushParagraph(para);
       const body = [];
-      let cur = line.replace(/^\s*\\\[/, "");
+      let cur = line.replace(/^\s*(\\\[|\[)/, "");
       let closed = false;
       while (true) {
-        if (cur.includes("\\]")) {
-          body.push(cur.slice(0, cur.indexOf("\\]")));
+        // Accept either closing form, matching the opener's flexibility.
+        const escIdx = cur.indexOf("\\]");
+        const bareIdx = /^\s*\]\s*$/.test(cur) ? cur.indexOf("]") : -1;
+        const idx = escIdx >= 0 ? escIdx : bareIdx;
+        if (idx >= 0) {
+          body.push(cur.slice(0, idx));
           closed = true;
           break;
         }
@@ -847,9 +856,10 @@ function latexToText(src) {
   let out = src;
   // Font and emphasis wrappers carry no meaning once we are plain text.
   // `\b` matters: without it `\right` matches inside `\rightarrow` and leaves
-  // the word "arrow" behind.
+  // the word "arrow" behind. The trailing space is preserved (not consumed) so
+  // `\mathbf r\cdot\mathbf v` does not collapse into `r\cdotv`.
   out = out.replace(
-    /\\(?:mathbf|mathrm|mathit|mathsf|mathtt|mathcal|mathbb|textbf|textit|text|operatorname|boxed|left|right)\b\s*/g,
+    /\\(?:mathbf|mathrm|mathit|mathsf|mathtt|mathcal|mathbb|textbf|textit|text|operatorname|boxed|left|right)\b/g,
     "",
   );
   // Fractions degrade to a/b rather than pretending to stack.
@@ -866,10 +876,17 @@ function latexToText(src) {
       ? [...body].map((c) => SUBSCRIPTS[c]).join("")
       : m,
   );
-  // Named symbols.
-  out = out.replace(/\\([A-Za-z]+|[,;:])/g, (m, name) =>
-    Object.prototype.hasOwnProperty.call(LATEX_SYMBOLS, name) ? LATEX_SYMBOLS[name] : m,
-  );
+  // Named symbols. Longest-first matching is implicit in the alternation being
+  // built from the key list, which matters because stripping a font wrapper
+  // consumes its trailing space: `\mathbf r\cdot\mathbf v` becomes
+  // `r\cdotv`, and a greedy `\\([A-Za-z]+)` would read the command as "cdotv"
+  // and leave it untouched.
+  const names = Object.keys(LATEX_SYMBOLS)
+    .filter((n) => /^[A-Za-z]+$/.test(n))
+    .sort((a, b) => b.length - a.length)
+    .join("|");
+  out = out.replace(new RegExp(`\\\\(${names})`, "g"), (_m, name) => LATEX_SYMBOLS[name]);
+  out = out.replace(/\\([,;:])/g, (m, name) => LATEX_SYMBOLS[name] ?? m);
   // Grouping braces have no meaning left.
   out = out.replace(/[{}]/g, "");
   return out.replace(/\s+/g, " ").trim();
