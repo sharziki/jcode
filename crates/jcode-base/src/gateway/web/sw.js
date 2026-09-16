@@ -8,7 +8,7 @@
  */
 "use strict";
 
-const VERSION = "jcode-shell-v1";
+const VERSION = "jcode-shell-v2-conversations";
 const PRECACHE = [
   "/",
   "/index.html",

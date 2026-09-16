@@ -7,7 +7,14 @@
 An installable web client for jcode sessions, embedded in the `jcode` binary and
 served by the same listener that already handles pairing and WebSockets. Open
 the gateway address on any phone or laptop browser, enter a pairing code, and
-you have your sessions.
+you have your conversations. The mobile client supports new conversations,
+real model selection, searchable history with project filters, renaming,
+streaming replies, Stop, mid-turn follow-ups, and per-conversation local drafts.
+
+The web design contract and actual Claude iOS reference sources are in
+[`gateway/DESIGN.md`](../crates/jcode-base/src/gateway/DESIGN.md). Jcode retains
+its own identity. The mobile redesign does not replace or modify other clients
+such as Hermes.
 
 It is a peer of the [iOS app](IOS_APP.md), not a replacement: same gateway, same
 wire protocol, same visual identity. The web app reaches every device today; the
@@ -156,9 +163,17 @@ the session you are already attached to, which is not enough to render a picker.
 - Auth: `Authorization: Bearer <token>`, or `?token=` for parity with `/ws`.
 - `?limit=` defaults to 50 and is clamped to 1..=500, so one request can never
   walk an entire install's history.
-- Backed by the durable recent-session SQLite index, not by reading transcripts:
-  an install can hold 100k+ sessions and a phone must not wait on that.
-- `live` comes from the active-PID directory.
+- Backed by the durable recent-session SQLite index. Normal persistence writes
+  bounded titles, previews, models and visible-message counts. Legacy enrichment
+  reads at most four eligible snapshots of at most 1 MiB each per request, with
+  one-hour retry markers. Journal-backed stale snapshots are not backfilled.
+  Blocking work runs off the async listener. Index failure is an HTTP 500, not
+  a successful empty directory.
+- `live` comes from active-PID markers whose owner process is still present.
+  It means attached/live, not necessarily generating.
+- `title` prefers custom, todo and generated titles, then the first real user
+  prompt, then `New conversation`. Internal friendly animal names are separate.
+- Unknown legacy previews, models and message counts remain `null`.
 
 ```json
 {
@@ -166,6 +181,10 @@ the session you are already attached to, which is not enough to render a picker.
     {
       "id": "session_cat_1789478626270_67e4c2b55dbfd0a1",
       "title": "MA261 Quiz 3 scope correction",
+      "preview": "The quiz covers these topics.",
+      "model": "gpt-6-astra",
+      "message_count": 4,
+      "friendly_name": "cat",
       "working_dir": "/home/you/projects/acme",
       "updated_at_ms": 1789487968748,
       "saved": false,
@@ -181,9 +200,9 @@ the session you are already attached to, which is not enough to render a picker.
 crates/jcode-base/src/gateway/
   web.rs                     asset table + HTTP responses (embedded via include_bytes!)
   web/
-    index.html               three views: pair, sessions, chat
-    app.js                   credentials, reconnecting socket, event reducer, renderer
-    app.css                  design tokens mirrored from the iOS Theme
+    index.html               pair/chat views, native history drawer and action sheets
+    app.js                   credentials, drafts, directory, socket, reducer, renderer
+    app.css                  warm mobile conversation tokens, light and dark themes
     sw.js                    app-shell precache, network-first
     manifest.webmanifest     installability
     icon*.png|svg            icons, derived from the iOS AppIcon
@@ -225,11 +244,29 @@ unknown event types are ignored so a newer server never breaks an older client.
   If either send cannot reach the server, the text stays in the composer and the
   failure is shown rather than silently dropping the user's words.
 - Returning to a backgrounded tab reconnects, since mobile browsers drop sockets.
+- Explicit offline events detach a stalled socket immediately and retain the
+  draft. Returning online reattaches and reconciles history. Drafts are scoped
+  by server origin and conversation, including a separate new-chat draft.
+- `message_end` finishes one assistant message, not a whole agent turn. Only
+  turn completion, interruption, authoritative state, or terminal error clears
+  processing. Tool calls can continue between assistant messages.
+- The transcript uses the existing WebSocket stream. The directory refreshes
+  every three seconds while visible, plus on focus and local actions. This is
+  bounded polling, not a separate server-push directory protocol.
+- Catalog replies are identified by request ID so their empty message array
+  cannot erase the active transcript. Model changes and renames wait for server
+  confirmation. New conversations are created lazily on first send/model choice.
+- The history drawer does not disconnect the active conversation. Empty chats
+  can be shown with the All conversations toggle, and are never deleted.
 
 ## Verification
 
 `cargo test -p jcode-base gateway` covers asset/manifest/service-worker
-consistency, PNG validity, path-escape rejection, and `?limit=` clamping.
+consistency, PNG validity, path-escape rejection, endpoint errors, stale-PID
+filtering, and `?limit=` clamping. `cargo test -p jcode-base recent_session_index`
+covers summary precedence, Unicode bounds, migration and bounded backfill.
+`node --test scripts/tests/gateway-client.test.cjs` exercises dependency-free
+client lifecycle, draft, model, and event regressions.
 
 Verified end to end in a real browser at a 390x844 mobile viewport against a
 live gateway running the **release** binary: pairing through the form, the
@@ -242,7 +279,7 @@ the pairing screen. Three devices paired independently against one server.
 
 A genuine streamed turn was observed rather than simulated: 10 `text_delta`
 events over the socket, assistant text growing incrementally (4 -> 30 chars),
-the streaming caret visible during and cleared after, and `message_end`
+the streaming caret visible during and cleared after, and `done`
 returning the composer to idle. Stop was exercised mid-stream (server confirmed
 `interrupted`), and typing mid-turn was confirmed to reach the server as
 `soft_interrupt_injected`.

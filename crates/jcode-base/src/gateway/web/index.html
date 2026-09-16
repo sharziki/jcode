@@ -3,15 +3,12 @@
   <head>
     <meta charset="utf-8" />
     <title>jcode</title>
-    <!-- No maximum-scale/user-scalable: blocking zoom locks out anyone who
-         needs to magnify text. The 16px input font already prevents iOS's
-         focus-zoom, which is the only reason to be tempted. -->
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="theme-color" content="#0b0d0e" />
-    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#faf9f6" />
+    <meta name="color-scheme" content="light dark" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="jcode" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" href="/icon.svg" type="image/svg+xml" />
@@ -19,91 +16,125 @@
     <link rel="stylesheet" href="/app.css" />
   </head>
   <body>
-    <!-- Pairing: shown until this browser holds a token for this server. -->
-    <main id="pair-view" class="view" hidden>
+    <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <symbol id="i-menu" viewBox="0 0 24 24"><path d="M5 7h14M5 12h14M5 17h8" /></symbol>
+      <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></symbol>
+      <symbol id="i-write" viewBox="0 0 24 24"><path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.375 2.625a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4Z" /></symbol>
+      <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1" /><circle cx="12" cy="12" r="1" /><circle cx="19" cy="12" r="1" /></symbol>
+      <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6" /></symbol>
+      <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 4 4" /></symbol>
+      <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7V5a1 1 0 0 1 1-1h5l3 3h8a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V7Z" /></symbol>
+      <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m8 10 4 4 4-4" /></symbol>
+      <symbol id="i-up" viewBox="0 0 24 24"><path d="M12 19V5m-6 6 6-6 6 6" /></symbol>
+      <symbol id="i-down" viewBox="0 0 24 24"><path d="M12 5v14m-6-6 6 6 6-6" /></symbol>
+      <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" stroke="none" /></symbol>
+      <symbol id="i-settings" viewBox="0 0 24 24"><path d="M4 7h16M4 17h16" /><circle cx="9" cy="7" r="3" /><circle cx="15" cy="17" r="3" /></symbol>
+      <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 10a8 8 0 1 0-2 8M20 4v6h-6" /></symbol>
+      <symbol id="i-mark" viewBox="0 0 40 40"><path d="m12 10-9 10 9 10m16-20 9 10-9 10M23 6l-6 28" /></symbol>
+    </svg>
+
+    <main id="pair-view" class="view pair-view">
       <div class="pair-card">
-        <div class="brand">
-          <img src="/icon.svg" alt="" width="48" height="48" />
-          <h1>jcode</h1>
-        </div>
-        <p class="muted">
-          Run <code>jcode pair</code> on your server, then enter the 6-digit code.
-        </p>
+        <div class="pair-brand"><svg class="brand-mark" aria-hidden="true"><use href="#i-mark" /></svg><span class="wordmark">jcode</span></div>
+        <h1>Your work.<br />A little closer.</h1>
+        <p class="pair-description">Connect to your computer and pick up the conversation from here.</p>
         <form id="pair-form" autocomplete="off">
-          <input
-            id="pair-code"
-            inputmode="numeric"
-            pattern="[0-9]*"
-            maxlength="6"
-            placeholder="000000"
-            aria-label="Pairing code"
-            required
-          />
-          <input
-            id="device-name"
-            type="text"
-            placeholder="Device name"
-            aria-label="Device name"
-          />
-          <button type="submit" id="pair-submit">Pair this device</button>
+          <label for="pair-code">Pairing code</label>
+          <input id="pair-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]*" maxlength="7" placeholder="000 000" aria-describedby="pair-instructions" required />
+          <p id="pair-instructions" class="field-hint">Run <code>jcode pair</code> on your computer to get a code.</p>
+          <label for="device-name">This device</label>
+          <input id="device-name" type="text" placeholder="My phone" maxlength="80" />
+          <button type="submit" id="pair-submit" class="primary-button">Connect to jcode <svg aria-hidden="true"><use href="#i-up" /></svg></button>
         </form>
         <p id="pair-status" class="status" role="status"></p>
-        <p class="muted small" id="pair-host"></p>
+        <div class="pair-footnote"><span class="private-dot" aria-hidden="true"></span><p id="pair-host" class="small"></p></div>
+        <p class="field-hint centered">Conversation history is stored on your computer.</p>
       </div>
     </main>
 
-    <!-- Session list. -->
-    <main id="sessions-view" class="view" hidden>
-      <header class="bar">
-        <h1 class="bar-title">Sessions</h1>
-        <div class="bar-actions">
-          <button id="sessions-refresh" class="ghost" title="Refresh">Refresh</button>
-          <button id="sessions-unpair" class="ghost danger" title="Forget this server">
-            Unpair
-          </button>
+    <main id="chat-view" class="view chat-view" hidden>
+      <header class="chat-header">
+        <button id="chat-back" class="icon-button floating" aria-label="Open conversations" aria-haspopup="dialog" aria-controls="sessions-view"><svg aria-hidden="true"><use href="#i-menu" /></svg></button>
+        <div class="chat-heading"><h1 id="chat-title">jcode</h1><span id="chat-phase" class="phase" data-phase="disconnected" role="status">Not connected</span></div>
+        <div class="header-actions">
+          <button id="chat-new" class="icon-button floating" aria-label="New conversation" title="New conversation"><svg aria-hidden="true"><use href="#i-write" /></svg></button>
+          <button id="chat-more" class="icon-button" aria-label="Conversation options" aria-haspopup="dialog" aria-controls="more-dialog"><svg aria-hidden="true"><use href="#i-more" /></svg></button>
         </div>
       </header>
-      <ul id="session-list" class="session-list" aria-label="Sessions" tabindex="0"></ul>
-      <!-- Shown only when the list is genuinely empty, so a new user sees an
-           explanation instead of a blank screen. -->
-      <div id="sessions-empty" class="empty" hidden>
-        <img src="/icon.svg" alt="" width="40" height="40" />
-        <p class="empty-title">No sessions yet</p>
-        <p class="empty-hint">
-          Start one on your computer with <code>jcode</code>, then tap Refresh.
-        </p>
+      <div class="conversation-stage">
+        <div id="welcome" class="welcome">
+          <svg class="welcome-mark" aria-hidden="true"><use href="#i-mark" /></svg>
+          <h2 id="welcome-title">What’s on your mind?</h2>
+        </div>
+        <div id="transcript" class="transcript" aria-label="Conversation" role="log" aria-live="polite" aria-relevant="additions" tabindex="0"></div>
+        <button id="jump-latest" class="icon-button jump-latest" aria-label="Jump to latest message" hidden><svg aria-hidden="true"><use href="#i-down" /></svg></button>
       </div>
-      <p id="sessions-status" class="status" role="status"></p>
+      <div class="composer-area">
+        <div id="status-line" class="status-line" role="status" hidden></div>
+        <form id="composer" class="composer">
+          <label class="sr-only" for="composer-input">Message jcode</label>
+          <textarea id="composer-input" rows="1" placeholder="Chat with jcode" enterkeyhint="enter"></textarea>
+          <div class="composer-toolbar">
+            <button type="button" id="composer-project" class="project-chip" aria-label="Choose project for new conversation" aria-haspopup="dialog" aria-controls="project-dialog"><svg aria-hidden="true"><use href="#i-folder" /></svg><span id="composer-project-name">Project</span></button>
+            <button type="button" id="composer-model" class="model-chip" aria-haspopup="dialog" aria-controls="model-dialog"><span id="composer-model-name">Choose model</span><svg aria-hidden="true"><use href="#i-chevron" /></svg></button>
+            <div class="composer-actions">
+              <button type="button" id="composer-stop" class="icon-button stop-button" aria-label="Stop generating" hidden><svg aria-hidden="true"><use href="#i-stop" /></svg></button>
+              <button type="submit" id="composer-send" class="icon-button send-button" aria-label="Send message"><svg aria-hidden="true"><use href="#i-up" /></svg></button>
+            </div>
+          </div>
+        </form>
+        <p id="composer-hint" class="composer-hint">Connected to your work, wherever you are.</p>
+      </div>
     </main>
 
-    <!-- Live session. -->
-    <main id="chat-view" class="view" hidden>
-      <header class="bar">
-        <button id="chat-back" class="ghost" aria-label="Back to sessions">&#8592;</button>
-        <h1 class="bar-title" id="chat-title">session</h1>
-        <span id="chat-phase" class="phase" data-phase="disconnected">offline</span>
-      </header>
-      <div
-        id="transcript"
-        class="transcript"
-        aria-live="polite"
-        aria-label="Conversation"
-        role="log"
-        tabindex="0"
-      ></div>
-      <div id="status-line" class="status-line" hidden></div>
-      <form id="composer" class="composer">
-        <textarea
-          id="composer-input"
-          rows="1"
-          placeholder="Message jcode"
-          aria-label="Message"
-        ></textarea>
-        <button type="submit" id="composer-send" aria-label="Send">&#8593;</button>
-        <button type="button" id="composer-stop" aria-label="Stop" hidden>&#9632;</button>
-      </form>
-    </main>
+    <dialog id="sessions-view" class="drawer" aria-labelledby="drawer-title">
+      <div class="drawer-inner">
+        <header class="drawer-header"><h2 id="drawer-title" class="wordmark">jcode</h2><button id="sessions-close" class="icon-button" data-close-dialog="sessions-view" aria-label="Close conversations"><svg aria-hidden="true"><use href="#i-close" /></svg></button></header>
+        <label class="search-field"><svg aria-hidden="true"><use href="#i-search" /></svg><input id="session-search" type="search" placeholder="Search conversations" aria-label="Search conversations" autocomplete="off" /></label>
+        <div class="history-filters"><label for="project-filter" class="sr-only">Filter by project</label><select id="project-filter"><option value="">All projects</option></select><button id="sessions-refresh" class="icon-button" aria-label="Refresh conversations"><svg aria-hidden="true"><use href="#i-refresh" /></svg></button></div>
+        <ul id="session-list" class="session-list" aria-label="Conversations"></ul>
+        <div id="sessions-empty" class="empty" hidden><p class="empty-title">A fresh start.</p><p class="empty-hint">Your conversations will appear here.</p></div>
+        <p id="sessions-status" class="status" role="status"></p>
+        <button id="sessions-all" class="text-button history-toggle" aria-pressed="false">Show all conversations</button>
+        <footer class="drawer-footer"><button id="drawer-settings" class="icon-button floating" aria-label="Settings" aria-haspopup="dialog" aria-controls="settings-dialog"><svg aria-hidden="true"><use href="#i-settings" /></svg></button><button id="sessions-new" class="new-chat-button"><svg aria-hidden="true"><use href="#i-plus" /></svg>New chat</button></footer>
+      </div>
+    </dialog>
 
+    <dialog id="model-dialog" class="sheet" aria-labelledby="model-title">
+      <div class="sheet-handle" aria-hidden="true"></div><header class="sheet-header"><h2 id="model-title">Choose a model</h2><button class="icon-button" data-close-dialog="model-dialog" aria-label="Close model picker"><svg aria-hidden="true"><use href="#i-close" /></svg></button></header>
+      <p class="sheet-description">The models available on your computer.</p>
+      <label class="search-field"><svg aria-hidden="true"><use href="#i-search" /></svg><input id="model-search" type="search" placeholder="Find a model" aria-label="Find a model" /></label>
+      <div id="model-list" class="option-list" aria-label="Available models"></div><p id="model-status" class="status" role="status"></p>
+    </dialog>
+
+    <dialog id="settings-dialog" class="sheet" aria-labelledby="settings-title">
+      <div class="sheet-handle" aria-hidden="true"></div><header class="sheet-header"><h2 id="settings-title">Make yourself at home.</h2><button class="icon-button" data-close-dialog="settings-dialog" aria-label="Close settings"><svg aria-hidden="true"><use href="#i-close" /></svg></button></header>
+      <label class="setting-row" for="theme-select"><span>Appearance</span><select id="theme-select"><option value="system">Use device setting</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
+      <div class="setting-row server-setting"><span>Connected server</span><code id="settings-host"></code></div>
+      <p class="field-hint">Jcode runs on your computer. This device is a window into it.</p>
+      <button id="sessions-unpair" class="text-button danger">Disconnect this device</button>
+    </dialog>
+
+    <dialog id="more-dialog" class="sheet" aria-labelledby="more-title">
+      <div class="sheet-handle" aria-hidden="true"></div><header class="sheet-header"><h2 id="more-title">This conversation</h2><button class="icon-button" data-close-dialog="more-dialog" aria-label="Close conversation options"><svg aria-hidden="true"><use href="#i-close" /></svg></button></header>
+      <button id="rename-open" class="action-row"><svg aria-hidden="true"><use href="#i-write" /></svg>Rename conversation</button>
+      <dl class="conversation-details"><div><dt>Project</dt><dd id="details-project">Not selected</dd></div><div><dt>Model</dt><dd id="details-model">Not selected</dd></div><div><dt>Session reference</dt><dd id="details-session">New conversation</dd></div></dl>
+      <p class="field-hint">Session references are internal IDs, not conversation titles.</p>
+    </dialog>
+
+    <dialog id="rename-dialog" class="sheet" aria-labelledby="rename-title">
+      <div class="sheet-handle" aria-hidden="true"></div><header class="sheet-header"><h2 id="rename-title">Give it a name.</h2><button class="icon-button" data-close-dialog="rename-dialog" aria-label="Cancel rename"><svg aria-hidden="true"><use href="#i-close" /></svg></button></header>
+      <form id="rename-form"><label for="rename-input">Conversation title</label><input id="rename-input" type="text" maxlength="120" placeholder="A name you’ll remember" required /><button type="submit" class="primary-button">Save name</button></form><p id="rename-status" class="status" role="status"></p>
+    </dialog>
+
+    <dialog id="project-dialog" class="sheet" aria-labelledby="project-title">
+      <div class="sheet-handle" aria-hidden="true"></div><header class="sheet-header"><h2 id="project-title">Where are we working?</h2><button class="icon-button" data-close-dialog="project-dialog" aria-label="Close project picker"><svg aria-hidden="true"><use href="#i-close" /></svg></button></header>
+      <p class="sheet-description">Choose a folder on your computer for a new conversation.</p><div id="project-list" class="option-list project-list"></div>
+      <form id="project-form"><label for="project-input">Or enter a folder path</label><input id="project-input" type="text" spellcheck="false" autocapitalize="off" placeholder="/home/you/projects/my-app" required /><button type="submit" class="primary-button">Start here</button></form><p id="project-status" class="status" role="status"></p>
+    </dialog>
+
+    <div id="toast" class="toast" role="status" hidden></div>
+    <noscript><p class="noscript">Enable JavaScript to connect to your Jcode server. Your conversations are stored on your computer.</p></noscript>
     <script src="/app.js"></script>
   </body>
 </html>

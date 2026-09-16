@@ -1,13 +1,13 @@
 {
   "name": "jcode",
   "short_name": "jcode",
-  "description": "Remote control for your jcode sessions.",
+  "description": "Your conversations and your work, wherever you are.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait-primary",
-  "background_color": "#0f0f14",
-  "theme_color": "#0b0d0e",
+  "background_color": "#faf9f6",
+  "theme_color": "#faf9f6",
   "categories": ["developer", "productivity"],
   "icons": [
     {
