@@ -516,6 +516,23 @@ button.ghost.danger {
   overflow-wrap: anywhere;
 }
 
+/* Math reads as prose, not code: same family, slightly set apart. */
+.msg .math {
+  font-style: italic;
+  white-space: nowrap;
+}
+
+.msg .math-display {
+  margin: 10px 0;
+  padding: 8px 12px;
+  text-align: center;
+  font-style: italic;
+  color: var(--text);
+  background: var(--surface-elevated);
+  border-radius: var(--r-sm);
+  overflow-x: auto;
+}
+
 .msg del {
   /* --text-3 measured 3.21:1 on the bubble surface; strikethrough still has to
      be readable, so use the brighter secondary token. */

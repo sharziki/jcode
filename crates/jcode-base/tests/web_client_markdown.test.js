@@ -43,6 +43,17 @@ class Node {
     this.style = {};
     this.attrs = {};
   }
+  /** The real DOM keeps `className` and `classList` in sync; so must the shim. */
+  set className(value) {
+    this.classList = new ClassList();
+    String(value)
+      .split(/\s+/)
+      .filter(Boolean)
+      .forEach((n) => this.classList.add(n));
+  }
+  get className() {
+    return this.classList.toString();
+  }
   append(...nodes) {
     for (const n of nodes) this.childNodes.push(n);
   }
@@ -364,4 +375,51 @@ test("a realistic mixed document keeps every construct", () => {
   assert.strictEqual(root.count("pre"), 1, "code block survives");
   assert.strictEqual(root.count("input"), 1, "task checkbox");
   assert.ok(root.textContent.includes("cargo test"));
+});
+
+// --- math ----------------------------------------------------------------
+
+test("inline math renders as unicode, not raw latex", () => {
+  // Real transcripts are full of this; 13 of 25 recent sessions on a live
+  // install contained LaTeX delimiters, and it previously showed as source.
+  const root = render("plug \\(\\mathbf r(t)\\) back in");
+  const math = root.find("span");
+  assert.ok(math, "inline math produces a span");
+  assert.ok(!root.textContent.includes("\\mathbf"), "command is consumed");
+  assert.ok(!root.textContent.includes("\\("), "delimiters are consumed");
+  assert.ok(root.textContent.includes("r(t)"), "the expression survives");
+});
+
+test("display math becomes its own block", () => {
+  const root = render("before\n\n\\[\n\\boxed{a \\rightarrow b}\n\\]\n\nafter");
+  const block = root.children.find((c) => c.classList.contains("math-display"));
+  assert.ok(block, "display math is a block");
+  assert.ok(block.textContent.includes("\u2192"), "\\rightarrow becomes an arrow");
+  assert.ok(!root.textContent.includes("\\boxed"), "wrapper command removed");
+  assert.ok(root.textContent.includes("before") && root.textContent.includes("after"));
+});
+
+test("common latex symbols map to unicode", () => {
+  const cases = [
+    ["\\(\\alpha\\)", "\u03b1"],
+    ["\\(\\leq\\)", "\u2264"],
+    ["\\(\\infty\\)", "\u221e"],
+    ["\\(\\sum\\)", "\u2211"],
+    ["\\(x \\times y\\)", "\u00d7"],
+  ];
+  for (const [src, want] of cases) {
+    assert.ok(render(src).textContent.includes(want), `${src} -> ${want}`);
+  }
+});
+
+test("fractions and scripts degrade readably", () => {
+  assert.ok(render("\\(\\frac{a}{b}\\)").textContent.includes("(a)/(b)"));
+  assert.ok(render("\\(x^2\\)").textContent.includes("x\u00b2"));
+  assert.ok(render("\\(a_1\\)").textContent.includes("a\u2081"));
+});
+
+test("unknown latex is left intact rather than dropped", () => {
+  // Losing content to a parse failure would be worse than showing source.
+  const root = render("\\(\\weirdcommand{z}\\)");
+  assert.ok(root.textContent.includes("weirdcommand") || root.textContent.includes("z"));
 });

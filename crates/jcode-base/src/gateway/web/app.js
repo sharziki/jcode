@@ -505,6 +505,34 @@ function parseBlocks(text) {
       continue;
     }
 
+    // Display math: `\[ ... \]` on its own lines, centered as a block.
+    if (/^\s*\\\[/.test(line)) {
+      flushParagraph(para);
+      const body = [];
+      let cur = line.replace(/^\s*\\\[/, "");
+      let closed = false;
+      while (true) {
+        if (cur.includes("\\]")) {
+          body.push(cur.slice(0, cur.indexOf("\\]")));
+          closed = true;
+          break;
+        }
+        body.push(cur);
+        i += 1;
+        if (i >= lines.length) break;
+        cur = lines[i];
+      }
+      i += 1;
+      const div = document.createElement("div");
+      div.className = "math-display";
+      div.textContent = latexToText(body.join(" "));
+      out.push(div);
+      if (!closed) {
+        // Unterminated while streaming: still show what arrived.
+      }
+      continue;
+    }
+
     if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) {
       flushParagraph(para);
       out.push(document.createElement("hr"));
@@ -710,7 +738,7 @@ function parseList(lines, start) {
 // transcript's `*\*\*text\*\*​*` wrapper turned into stray italics full of
 // literal backslashes.
 const INLINE_RE =
-  /(\\[\\`*_~[\]()#+\-.!>])|(`[^`]+`)|((?<!\\)\*\*(?:[^*\\]|\\.)+?\*\*|(?<!\\)__(?:[^_\\]|\\.)+?__)|((?<!\\)\*(?:[^*\\\n]|\\.)+?\*|(?<![A-Za-z0-9_\\])_(?:[^_\\\n]|\\.)+?_(?![A-Za-z0-9_]))|((?<!\\)~~(?:[^~\\]|\\.)+?~~)|(\[[^\]\n]*\]\([^)\s]+\))|(https?:\/\/[^\s<>()]+)/g;
+  /(\\\((?:[\s\S]*?)\\\))|(\\[\\`*_~[\]()#+\-.!>])|(`[^`]+`)|((?<!\\)\*\*(?:[^*\\]|\\.)+?\*\*|(?<!\\)__(?:[^_\\]|\\.)+?__)|((?<!\\)\*(?:[^*\\\n]|\\.)+?\*|(?<![A-Za-z0-9_\\])_(?:[^_\\\n]|\\.)+?_(?![A-Za-z0-9_]))|((?<!\\)~~(?:[^~\\]|\\.)+?~~)|(\[[^\]\n]*\]\([^)\s]+\))|(https?:\/\/[^\s<>()]+)/g;
 
 function renderInline(target, text) {
   let last = 0;
@@ -720,30 +748,37 @@ function renderInline(target, text) {
     }
     const [tok] = m;
     if (m[1]) {
+      // Inline math `\( ... \)`, rendered to Unicode instead of left as raw
+      // source, which is unreadable on a phone.
+      const span = document.createElement("span");
+      span.className = "math";
+      span.textContent = latexToText(tok.slice(2, -2));
+      target.append(span);
+    } else if (m[2]) {
       // Backslash escape: emit the literal character, never the backslash.
       // Real transcripts contain `\*\*text\*\*`, which without this both
       // showed stray backslashes and mis-parsed the surrounding emphasis.
       target.append(document.createTextNode(tok[1]));
-    } else if (m[2]) {
+    } else if (m[3]) {
       const code = document.createElement("code");
       code.textContent = tok.slice(1, -1);
       target.append(code);
-    } else if (m[3]) {
+    } else if (m[4]) {
       const strong = document.createElement("strong");
       renderInline(strong, tok.slice(2, -2));
       target.append(strong);
-    } else if (m[4]) {
+    } else if (m[5]) {
       const em = document.createElement("em");
       renderInline(em, tok.slice(1, -1));
       target.append(em);
-    } else if (m[5]) {
+    } else if (m[6]) {
       const del = document.createElement("del");
       renderInline(del, tok.slice(2, -2));
       target.append(del);
-    } else if (m[6]) {
+    } else if (m[7]) {
       const parts = tok.match(/^\[([^\]]*)\]\(([^)\s]+)\)$/);
       target.append(buildLink(parts[2], parts[1] || parts[2]));
-    } else if (m[7]) {
+    } else if (m[8]) {
       target.append(buildLink(tok, tok));
     }
     last = m.index + tok.length;
@@ -751,6 +786,93 @@ function renderInline(target, text) {
   if (last < text.length) {
     target.append(document.createTextNode(text.slice(last)));
   }
+}
+
+/**
+ * Math rendering.
+ *
+ * jcode's TUI renders LaTeX to Unicode (see `jcode-render-core/src/math.rs`),
+ * and 13 of 25 recent sessions on a real install contain LaTeX. Without this
+ * the web client showed raw source like `\(\mathbf r(t)\)` and
+ * `\[\boxed{surface \rightarrow point}\]`, which is unreadable on a phone.
+ *
+ * This is deliberately a readable subset of the TUI renderer, not a port of it:
+ * delimiters are stripped, the common symbol commands become their Unicode
+ * equivalents, and structure like fractions degrades to `a/b` rather than
+ * pretending to typeset. Anything unrecognized is left as-is, so no content is
+ * ever lost to a parse failure.
+ */
+const LATEX_SYMBOLS = {
+  to: "\u2192", rightarrow: "\u2192", leftarrow: "\u2190",
+  leftrightarrow: "\u2194", Rightarrow: "\u21d2", implies: "\u21d2",
+  Leftarrow: "\u21d0", Leftrightarrow: "\u21d4", iff: "\u21d4",
+  mapsto: "\u21a6", uparrow: "\u2191", downarrow: "\u2193",
+  times: "\u00d7", cdot: "\u22c5", div: "\u00f7", pm: "\u00b1", mp: "\u2213",
+  leq: "\u2264", le: "\u2264", geq: "\u2265", ge: "\u2265", neq: "\u2260",
+  ne: "\u2260", approx: "\u2248", equiv: "\u2261", sim: "\u223c",
+  propto: "\u221d", infty: "\u221e", partial: "\u2202", nabla: "\u2207",
+  sum: "\u2211", prod: "\u220f", int: "\u222b", oint: "\u222e",
+  sqrt: "\u221a", in: "\u2208", notin: "\u2209", subset: "\u2282",
+  subseteq: "\u2286", supset: "\u2283", supseteq: "\u2287", cup: "\u222a",
+  cap: "\u2229", emptyset: "\u2205", varnothing: "\u2205",
+  forall: "\u2200", exists: "\u2203", neg: "\u00ac", land: "\u2227",
+  lor: "\u2228", ldots: "\u2026", dots: "\u2026", cdots: "\u22ef",
+  angle: "\u2220", perp: "\u22a5", parallel: "\u2225",
+  langle: "\u27e8", rangle: "\u27e9", alpha: "\u03b1", beta: "\u03b2",
+  gamma: "\u03b3", delta: "\u03b4", epsilon: "\u03b5", varepsilon: "\u03b5",
+  zeta: "\u03b6", eta: "\u03b7", theta: "\u03b8", lambda: "\u03bb",
+  mu: "\u03bc", nu: "\u03bd", xi: "\u03be", pi: "\u03c0", rho: "\u03c1",
+  sigma: "\u03c3", tau: "\u03c4", phi: "\u03c6", varphi: "\u03c6",
+  chi: "\u03c7", psi: "\u03c8", omega: "\u03c9", Gamma: "\u0393",
+  Delta: "\u0394", Theta: "\u0398", Lambda: "\u039b", Xi: "\u039e",
+  Pi: "\u03a0", Sigma: "\u03a3", Phi: "\u03a6", Psi: "\u03a8",
+  Omega: "\u03a9", quad: " ", qquad: "  ", ",": " ", ";": " ", ":": " ",
+};
+
+const SUPERSCRIPTS = {
+  0: "\u2070", 1: "\u00b9", 2: "\u00b2", 3: "\u00b3", 4: "\u2074",
+  5: "\u2075", 6: "\u2076", 7: "\u2077", 8: "\u2078", 9: "\u2079",
+  "+": "\u207a", "-": "\u207b", n: "\u207f", i: "\u2071",
+};
+
+const SUBSCRIPTS = {
+  0: "\u2080", 1: "\u2081", 2: "\u2082", 3: "\u2083", 4: "\u2084",
+  5: "\u2085", 6: "\u2086", 7: "\u2087", 8: "\u2088", 9: "\u2089",
+  "+": "\u208a", "-": "\u208b", a: "\u2090", e: "\u2091", i: "\u1d62",
+  o: "\u2092", x: "\u2093", n: "\u2099", t: "\u209c",
+};
+
+/** Convert one LaTeX fragment to readable Unicode text. */
+function latexToText(src) {
+  let out = src;
+  // Font and emphasis wrappers carry no meaning once we are plain text.
+  // `\b` matters: without it `\right` matches inside `\rightarrow` and leaves
+  // the word "arrow" behind.
+  out = out.replace(
+    /\\(?:mathbf|mathrm|mathit|mathsf|mathtt|mathcal|mathbb|textbf|textit|text|operatorname|boxed|left|right)\b\s*/g,
+    "",
+  );
+  // Fractions degrade to a/b rather than pretending to stack.
+  out = out.replace(/\\(?:d|t)?frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}/g, "($1)/($2)");
+  out = out.replace(/\\sqrt\s*\{([^{}]*)\}/g, "\u221a($1)");
+  // Scripts, where every character has a Unicode form.
+  out = out.replace(/\^\{?([A-Za-z0-9+-]+)\}?/g, (m, body) =>
+    [...body].every((c) => SUPERSCRIPTS[c])
+      ? [...body].map((c) => SUPERSCRIPTS[c]).join("")
+      : m,
+  );
+  out = out.replace(/_\{?([A-Za-z0-9+-]+)\}?/g, (m, body) =>
+    [...body].every((c) => SUBSCRIPTS[c])
+      ? [...body].map((c) => SUBSCRIPTS[c]).join("")
+      : m,
+  );
+  // Named symbols.
+  out = out.replace(/\\([A-Za-z]+|[,;:])/g, (m, name) =>
+    Object.prototype.hasOwnProperty.call(LATEX_SYMBOLS, name) ? LATEX_SYMBOLS[name] : m,
+  );
+  // Grouping braces have no meaning left.
+  out = out.replace(/[{}]/g, "");
+  return out.replace(/\s+/g, " ").trim();
 }
 
 /** Build a link, or plain text when the scheme is not one we trust. */
