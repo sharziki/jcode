@@ -396,3 +396,48 @@ test('session rows keep a stable two-line shape whether or not the server sends 
   assert.equal(h.run(`${rows}.length`), 1);
   assert.equal(h.run(`${rows}[0].dataset.sessionId`), 'rich');
 });
+
+test('directory polling restarts after the tab is hidden and shown again', async () => {
+  const h = harness(); await h.flush();
+  const pending = () => [...h.timers.values()].filter((t) => t.delay === 3000).length;
+  // A poll is scheduled once the first directory load settles.
+  assert.equal(pending(), 1, 'expected a directory poll after initial load');
+
+  // Backgrounding clears the chain, which is correct: do not poll while hidden.
+  h.document.visibilityState = 'hidden';
+  await h.document.emit('visibilitychange');
+  assert.equal(pending(), 0, 'hidden tab should not keep polling');
+
+  // Returning to the foreground must restart it. Without a reschedule on the
+  // early-return paths, refreshSessions() bails and the chain stays dead, so
+  // the list silently freezes and every timestamp ages on screen.
+  h.document.visibilityState = 'visible';
+  await h.document.emit('visibilitychange');
+  await h.flush();
+  assert.equal(pending(), 1, 'foreground must restart directory polling');
+});
+
+test('directory polling survives a refresh that overlaps an in-flight request', async () => {
+  const h = harness(); await h.flush();
+  const pending = () => [...h.timers.values()].filter((t) => t.delay === 3000).length;
+
+  // Hold the next directory fetch open, the way a slow phone connection does.
+  let release;
+  h.setFetch(() => new Promise((r) => { release = () => r({ ok: true, status: 200, json: async () => ({ sessions: [] }) }); }));
+
+  // Fire the scheduled poll while that request is still outstanding.
+  const timer = [...h.timers.entries()].find(([, t]) => t.delay === 3000);
+  h.timers.delete(timer[0]);
+  timer[1].fn();
+  await h.flush();
+
+  // A second trigger (focus/online/visibility all call refreshSessions) lands
+  // mid-flight and hits `if (directoryRequest) return`. That path must not
+  // swallow the chain.
+  h.run('refreshSessions()');
+  await h.flush();
+
+  release();
+  await h.flush();
+  assert.equal(pending(), 1, 'an overlapping refresh must still leave exactly one poll queued');
+});
