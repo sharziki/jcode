@@ -274,13 +274,13 @@ const connection = {
   // Terminal turn events fan out across clients; use a browser-random request namespace.
   socket: null, token: null, sessionID: null, nextRequestID: Math.floor(Math.random() * 2 ** 48) + 1, attempt: 0, timer: null,
   stopped: true, attached: false, fatalReason: null, attachRequestID: null,
-  historyRequestID: null, syncRequestID: null, catalogRequests: new Set(), requests: new Map(),
+  historyRequestID: null, syncRequestID: null, syncError: null, catalogRequests: new Set(), requests: new Map(),
   start(token, sessionID) {
     this.stop(); this.stopped = false; this.token = token; this.sessionID = sessionID || null;
     this.attempt = 0; this.fatalReason = null; this.open();
   },
   closeSocket() {
-    const socket = this.socket; this.socket = null; this.attached = false; this.syncRequestID = null;
+    const socket = this.socket; this.socket = null; this.attached = false; this.syncRequestID = null; this.syncError = null;
     if (socket) { socket.onopen = socket.onmessage = socket.onclose = socket.onerror = null; try { socket.close(); } catch { /* already closed */ } }
   },
   stop() { this.stopped = true; clearTimeout(this.timer); this.closeSocket(); this.catalogRequests.clear(); this.requests.clear(); },
@@ -340,7 +340,8 @@ const connection = {
     try { this.socket.send(JSON.stringify({ id, ...request })); this.requests.set(id, request.type); return id; }
     catch { return false; }
   },
-  syncHistory() {
+  syncHistory(error = null) {
+    if (error) this.syncError = error;
     if (this.attached && !this.syncRequestID) this.syncRequestID = this.send({ type: "get_history" }) || null;
   },
   catalog() { if (!this.attached) return; const id = this.send({ type: "get_model_catalog" }); if (id) this.catalogRequests.add(id); },
@@ -1067,10 +1068,13 @@ function handleEvent(event) {
     case "history": {
       updateCatalog(event);
       if (connection.catalogRequests.delete(event.id)) { connection.requests.delete(event.id); break; }
-      if (event.id === connection.syncRequestID) connection.syncRequestID = null;
+      const syncError = event.id === connection.syncRequestID ? connection.syncError : null;
+      if (event.id === connection.syncRequestID) { connection.syncRequestID = null; connection.syncError = null; }
       const preservePosition = el.transcript.children.length > 0;
       acceptSession(event.session_id); connection.attached = true; connection.fatalReason = null;
-      renderHistory(event, preservePosition); setPhase("connected"); renderModels();
+      renderHistory(event, preservePosition);
+      if (syncError) addMessage("error", syncError);
+      setPhase("connected"); renderModels();
       connection.requests.delete(event.id);
       if (view.queuedSend) { view.queuedSend = false; sendMessage(); }
       refreshSessions(); break;
@@ -1128,7 +1132,9 @@ function handleEvent(event) {
       if (event.id === view.renameRequest) { view.renameRequest = null; setStatus($("rename-status"), message, "error"); }
       // Broadcast terminal failures retain the originating client’s request ID.
       // Known local control failures must not terminate an unrelated active turn.
-      if (request === "message" || (!request && connection.attached)) { endStreaming(); setProcessing(false); setStatusLine(""); }
+      if (request === "message" || (!request && connection.attached)) {
+        endStreaming(); setProcessing(false); setStatusLine(""); connection.syncHistory(message);
+      }
       if (connection.requests.get(event.id) === "cancel") { view.stopping = false; updateComposer(); }
       recoverSend(event.id); addMessage("error", message); connection.requests.delete(event.id); break;
     }

@@ -343,3 +343,15 @@ test('empty search preserves styled title and hint nodes across refreshes', asyn
   assert.equal(empty.querySelectorAll('.empty-title')[0], title); assert.equal(empty.querySelectorAll('.empty-hint')[0], hint);
   assert.equal(title.textContent, 'No matching conversations'); assert.match(hint.textContent, /Clear search/);
 });
+
+test('failed external turns reconcile missing user prompts and retain the terminal error after history', async () => {
+  const h = harness(); await h.attach();
+  h.event({ type: 'error', id: 987654321, message: 'External provider failed' });
+  const request = h.sockets.at(-1).sent.at(-1); assert.equal(request.type, 'get_history');
+  h.event({ type: 'history', id: request.id, session_id: 'session-one', messages: [{ role: 'user', content: 'External prompt that failed' }], activity: { is_processing: false } });
+  assert.equal(h.run("el.transcript.querySelectorAll('.msg.user').length"), 1);
+  assert.equal(h.run("el.transcript.querySelectorAll('.msg.error').length"), 1);
+  assert.match(h.nodes.get('transcript').textContent, /External prompt that failed/);
+  assert.match(h.nodes.get('transcript').textContent, /External provider failed/);
+  assert.equal(h.run('view.processing'), false); assert.equal(h.run('connection.syncError'), null);
+});
