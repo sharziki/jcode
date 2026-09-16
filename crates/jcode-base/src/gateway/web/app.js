@@ -239,10 +239,13 @@ function renderSessions() {
     button.dataset.sessionId = session.id;
     if (session.id === connection.sessionID) button.setAttribute("aria-current", "page");
     const title = document.createElement("span"); title.className = "session-title"; title.textContent = session.title || "New conversation";
-    const preview = document.createElement("span"); preview.className = "session-preview"; preview.textContent = session.preview || "";
     const meta = document.createElement("span"); meta.className = "session-meta";
     meta.textContent = [projectLabel(session.working_dir), relativeTime(session.updated_at_ms)].filter(Boolean).join(" · ");
-    button.append(title, preview, meta);
+    // Two-line rows: title + metadata only. The preview stays searchable in the
+    // session data and surfaces on hover, so row height does not change when the
+    // server starts returning enriched previews.
+    if (session.preview) button.title = session.preview;
+    button.append(title, meta);
     if (session.live) { const live = document.createElement("span"); live.className = "session-live"; live.textContent = "Live"; meta.append(document.createTextNode(" · "), live); }
     button.addEventListener("click", () => openChat(session)); item.append(button); el.sessionList.append(item);
     if (focusedID === session.id) button.focus({ preventScroll: true });

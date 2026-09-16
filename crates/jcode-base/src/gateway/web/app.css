@@ -218,7 +218,6 @@ dialog::backdrop { background: #15141035; backdrop-filter: blur(2px); }
 .session-row { display: block; width: 100%; min-height: 48px; padding: 11px 10px; text-align: left; border-radius: 11px; margin: 2px 0; }
 .session-row[aria-current="true"], .session-row[aria-current="page"], .session-row.selected, .session-row.active { background: var(--user); }
 .session-title { display: block; font-size: 14px; line-height: 1.4; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.session-preview { display: block; color: var(--text-2); font-size: 12px; line-height: 1.5; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-meta { display: block; margin-top: 4px; font-size: 11px; line-height: 1.5; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-live { color: var(--live); font-size: 11px; }
 .session-live::before { content: ""; display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: currentColor; margin: 0 5px 1px 0; }

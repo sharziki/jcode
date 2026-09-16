@@ -374,3 +374,25 @@ test('native role=tool history reconstructs output disclosures after completion 
   assert.equal(reloaded.run("view.tools.get('bash-1').body.textContent"), '/home/test/project');
   assert.equal(reloaded.run("view.tools.get('bash-1').node.open"), false);
 });
+
+test('session rows keep a stable two-line shape whether or not the server sends previews', async () => {
+  const h = harness(); await h.flush();
+  h.run("sessions=[{id:'bare',title:'Bare row',working_dir:'/home/test/alpha',updated_at_ms:Date.now()},{id:'rich',title:'Rich row',preview:'A long preview line the new gateway returns',working_dir:'/home/test/alpha',updated_at_ms:Date.now()}]; $('session-search').value=''; renderSessions()");
+  // No preview element is ever rendered, so enriched rows cannot grow a third line.
+  assert.equal(h.run("el.sessionList.querySelectorAll('.session-preview').length"), 0);
+  const rows = "el.sessionList.querySelectorAll('.session-row')";
+  const bare = `${rows}.find((n) => n.dataset.sessionId === 'bare')`;
+  const rich = `${rows}.find((n) => n.dataset.sessionId === 'rich')`;
+  // Both rows have identical structure: title + meta, nothing else.
+  assert.equal(h.run(`${bare}.children.length`), 2);
+  assert.equal(h.run(`${rich}.children.length`), 2);
+  assert.equal(h.run(`${bare}.querySelectorAll('.session-title').length`), 1);
+  assert.equal(h.run(`${bare}.querySelectorAll('.session-meta').length`), 1);
+  // The preview is retained and surfaces as a tooltip rather than as a row line.
+  assert.equal(h.run(`${rich}.title`), 'A long preview line the new gateway returns');
+  assert.ok(!h.run(`${bare}.title`));
+  // Search still matches on preview text even though it is never rendered.
+  h.run("$('session-search').value='long preview line'; renderSessions()");
+  assert.equal(h.run(`${rows}.length`), 1);
+  assert.equal(h.run(`${rows}[0].dataset.sessionId`), 'rich');
+});
