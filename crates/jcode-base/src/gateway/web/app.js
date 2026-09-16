@@ -146,6 +146,12 @@ function relativeTime(ms) {
   return `${Math.floor(minutes / 1440)}d ago`;
 }
 function shortPath(path) { return (path || "").replace(/^\/home\/[^/]+/, "~").replace(/^\/Users\/[^/]+/, "~"); }
+function projectLabel(path) {
+  const short = shortPath(path);
+  const name = short.split("/").filter(Boolean).pop() || short;
+  const matches = availableDirectories().filter((dir) => shortPath(dir).split("/").filter(Boolean).pop() === name);
+  return matches.length > 1 ? short : name;
+}
 function validDirectory(path) { return typeof path === "string" && /^(\/|[A-Za-z]:[\\/])/.test(path) && !/[\x00-\x1f]/.test(path); }
 function availableDirectories() {
   return [...new Set(sessions.filter((s) => validDirectory(s.working_dir)).map((s) => s.working_dir))];
@@ -213,7 +219,12 @@ function renderSessions() {
   el.sessionList.textContent = "";
   el.sessionsEmpty.hidden = visible.length > 0;
   if (!visible.length) {
-    setStatus(el.sessionsEmpty, sessions.length ? "No matching conversations. Clear search or project filters, or show all conversations." : "No conversations yet. Start a new chat below.");
+    let title = el.sessionsEmpty.querySelectorAll(".empty-title")[0];
+    let hint = el.sessionsEmpty.querySelectorAll(".empty-hint")[0];
+    if (!title) { title = document.createElement("p"); title.className = "empty-title"; el.sessionsEmpty.append(title); }
+    if (!hint) { hint = document.createElement("p"); hint.className = "empty-hint"; el.sessionsEmpty.append(hint); }
+    setStatus(title, sessions.length ? "No matching conversations" : "A fresh start.");
+    setStatus(hint, sessions.length ? "Clear search or project filters, or show all conversations." : "No conversations yet. Start a new chat below.");
   }
   let previousGroup = "";
   for (const session of visible) {
@@ -230,9 +241,9 @@ function renderSessions() {
     const title = document.createElement("span"); title.className = "session-title"; title.textContent = session.title || "New conversation";
     const preview = document.createElement("span"); preview.className = "session-preview"; preview.textContent = session.preview || "";
     const meta = document.createElement("span"); meta.className = "session-meta";
-    meta.textContent = [shortPath(session.working_dir), relativeTime(session.updated_at_ms)].filter(Boolean).join(" · ");
+    meta.textContent = [projectLabel(session.working_dir), relativeTime(session.updated_at_ms)].filter(Boolean).join(" · ");
     button.append(title, preview, meta);
-    if (session.live) { const live = document.createElement("span"); live.className = "session-live"; live.textContent = "Live"; button.append(live); }
+    if (session.live) { const live = document.createElement("span"); live.className = "session-live"; live.textContent = "Live"; meta.append(document.createTextNode(" · "), live); }
     button.addEventListener("click", () => openChat(session)); item.append(button); el.sessionList.append(item);
     if (focusedID === session.id) button.focus({ preventScroll: true });
   }
@@ -260,15 +271,16 @@ async function openSessions() { openDialog("sessions-view"); await refreshSessio
 
 // One transport. Every replacement detaches handlers and closes the stale socket.
 const connection = {
-  socket: null, token: null, sessionID: null, nextRequestID: 1, attempt: 0, timer: null,
+  // Terminal turn events fan out across clients; use a browser-random request namespace.
+  socket: null, token: null, sessionID: null, nextRequestID: Math.floor(Math.random() * 2 ** 48) + 1, attempt: 0, timer: null,
   stopped: true, attached: false, fatalReason: null, attachRequestID: null,
-  historyRequestID: null, catalogRequests: new Set(), requests: new Map(),
+  historyRequestID: null, syncRequestID: null, catalogRequests: new Set(), requests: new Map(),
   start(token, sessionID) {
     this.stop(); this.stopped = false; this.token = token; this.sessionID = sessionID || null;
     this.attempt = 0; this.fatalReason = null; this.open();
   },
   closeSocket() {
-    const socket = this.socket; this.socket = null; this.attached = false;
+    const socket = this.socket; this.socket = null; this.attached = false; this.syncRequestID = null;
     if (socket) { socket.onopen = socket.onmessage = socket.onclose = socket.onerror = null; try { socket.close(); } catch { /* already closed */ } }
   },
   stop() { this.stopped = true; clearTimeout(this.timer); this.closeSocket(); this.catalogRequests.clear(); this.requests.clear(); },
@@ -327,6 +339,9 @@ const connection = {
     const id = this.nextRequestID++;
     try { this.socket.send(JSON.stringify({ id, ...request })); this.requests.set(id, request.type); return id; }
     catch { return false; }
+  },
+  syncHistory() {
+    if (this.attached && !this.syncRequestID) this.syncRequestID = this.send({ type: "get_history" }) || null;
   },
   catalog() { if (!this.attached) return; const id = this.send({ type: "get_model_catalog" }); if (id) this.catalogRequests.add(id); },
 };
@@ -1052,6 +1067,7 @@ function handleEvent(event) {
     case "history": {
       updateCatalog(event);
       if (connection.catalogRequests.delete(event.id)) { connection.requests.delete(event.id); break; }
+      if (event.id === connection.syncRequestID) connection.syncRequestID = null;
       const preservePosition = el.transcript.children.length > 0;
       acceptSession(event.session_id); connection.attached = true; connection.fatalReason = null;
       renderHistory(event, preservePosition); setPhase("connected"); renderModels();
@@ -1079,10 +1095,14 @@ function handleEvent(event) {
     case "message_end": endStreaming(); break; // A tool-use message is not the end of the turn.
     case "done": {
       const request = connection.requests.get(event.id);
-      if (!request || request === "message" || request === "cancel") { endStreaming(); setProcessing(false); setStatusLine(""); refreshSessions(); }
+      if (!request || request === "message" || request === "cancel") {
+        endStreaming(); setProcessing(false); setStatusLine(""); refreshSessions();
+        // Native fanout has no ordinary user-message echo. Reconcile observer prompts at the turn boundary.
+        connection.syncHistory();
+      }
       acknowledge(event.id); connection.requests.delete(event.id); break;
     }
-    case "interrupted": endStreaming(); setProcessing(false); setStatusLine("Stopped."); refreshSessions(); break;
+    case "interrupted": endStreaming(); setProcessing(false); setStatusLine("Stopped."); connection.syncHistory(); refreshSessions(); break;
     case "status_detail": setStatusLine(event.detail || ""); break;
     case "tokens": setStatusLine(`${event.input} in / ${event.output} out`); break;
     case "state": setProcessing(Boolean(event.is_processing)); break;
@@ -1098,12 +1118,17 @@ function handleEvent(event) {
     case "soft_interrupt_injected": echoUser(event.content || "", "soft_interrupt_injected", event.display_role); break;
     case "error": {
       const message = event.message || "Server error";
+      const request = connection.requests.get(event.id);
+      if (event.id === connection.syncRequestID) connection.syncRequestID = null;
+      connection.catalogRequests.delete(event.id);
       if (!connection.attached && (event.id === connection.attachRequestID || event.id === connection.historyRequestID)) {
         connection.fatalReason = message; connection.stop(); view.queuedSend = false; setPhase("failed", "Unavailable");
       }
       if (event.id === view.modelRequest) { view.modelRequest = null; renderModels(); setStatus($("model-status"), message, "error"); }
       if (event.id === view.renameRequest) { view.renameRequest = null; setStatus($("rename-status"), message, "error"); }
-      if (connection.requests.get(event.id) === "message") { endStreaming(); setProcessing(false); setStatusLine(""); }
+      // Broadcast terminal failures retain the originating client’s request ID.
+      // Known local control failures must not terminate an unrelated active turn.
+      if (request === "message" || (!request && connection.attached)) { endStreaming(); setProcessing(false); setStatusLine(""); }
       if (connection.requests.get(event.id) === "cancel") { view.stopping = false; updateComposer(); }
       recoverSend(event.id); addMessage("error", message); connection.requests.delete(event.id); break;
     }

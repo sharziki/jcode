@@ -304,3 +304,42 @@ test('offline event immediately clears attachment and online resumes one socket 
   assert.equal(h.sockets.length, count + 1); assert.equal(h.sockets.filter((s) => !s.closed).length, 1);
   assert.equal(h.run('el.composerInput.value'), 'offline draft');
 });
+
+test('external turn completion reconciles observer user prompts without creating another socket', async () => {
+  const h = harness(); await h.attach();
+  h.event({ type: 'text_delta', text: 'Observed assistant response' });
+  h.event({ type: 'done', id: 987654321 });
+  const request = h.sockets.at(-1).sent.at(-1);
+  assert.equal(request.type, 'get_history'); assert.equal(h.sockets.length, 1);
+  const count = h.sockets.at(-1).sent.length;
+  h.event({ type: 'done', id: 987654322 }); assert.equal(h.sockets.at(-1).sent.length, count);
+  h.event({ type: 'history', id: request.id, session_id: 'session-one', messages: [{ role: 'user', content: 'Sent from another client' }, { role: 'assistant', content: 'Observed assistant response' }], activity: { is_processing: false } });
+  assert.equal(h.run("el.transcript.querySelectorAll('.msg.user').length"), 1);
+  assert.match(h.nodes.get('transcript').textContent, /Sent from another client/);
+  assert.equal(h.run('connection.syncRequestID'), null);
+});
+
+test('external terminal failure ends processing, but known local control failure does not', async () => {
+  const h = harness(); await h.attach(); h.event({ type: 'text_delta', text: 'External work' });
+  h.run("view.renameRequest=connection.send({type:'rename_session',title:'rename'})");
+  h.event({ type: 'error', id: h.run('view.renameRequest'), message: 'Rename failed' }); assert.equal(h.run('view.processing'), true);
+  h.event({ type: 'error', id: 987654321, message: 'Upstream terminal failure' });
+  assert.equal(h.run('view.processing'), false); assert.equal(h.nodes.get('composer-stop').hidden, true); assert.equal(h.run('view.streaming'), null);
+});
+
+test('session live badge is inline metadata and ambiguous projects retain path context', async () => {
+  const h = harness(); await h.flush();
+  h.run("sessions=[{id:'one',title:'One',working_dir:'/home/test/project',live:true},{id:'two',title:'Two',working_dir:'/work/project'}]; renderSessions()");
+  assert.equal(h.run("projectLabel('/home/test/project')"), '~/project');
+  const live = h.nodes.get('session-list').querySelectorAll('.session-live')[0]; assert.equal(live.parentNode.className, 'session-meta');
+  h.run("sessions=sessions.slice(0,1)"); assert.equal(h.run("projectLabel('/home/test/project')"), 'project');
+});
+
+test('empty search preserves styled title and hint nodes across refreshes', async () => {
+  const h = harness(); await h.flush();
+  const empty = h.nodes.get('sessions-empty');
+  const title = empty.querySelectorAll('.empty-title')[0]; const hint = empty.querySelectorAll('.empty-hint')[0];
+  h.run("sessions=[{id:'one',title:'One'}]; $('session-search').value='not found'; renderSessions()");
+  assert.equal(empty.querySelectorAll('.empty-title')[0], title); assert.equal(empty.querySelectorAll('.empty-hint')[0], hint);
+  assert.equal(title.textContent, 'No matching conversations'); assert.match(hint.textContent, /Clear search/);
+});
