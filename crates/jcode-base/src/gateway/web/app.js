@@ -440,6 +440,24 @@ function renderMarkdown(target, text) {
   }
 }
 
+/**
+ * jcode marks a reasoning line as `*<U+2063>body<U+2063>*`, with the body's
+ * inline markdown backslash-escaped so it renders literally inside the
+ * emphasis run (see `jcode-render-core/src/reasoning.rs`). That is a protocol
+ * detail, not something a reader should see: on the deployed app it surfaced as
+ * literal `**Clarifying ...**` wrapped in invisible separators.
+ *
+ * Returns the unescaped body when `line` is a reasoning line, else null.
+ */
+function reasoningLineContent(line) {
+  const trimmed = line.replace(/[\s\r\n]+$/, "");
+  if (!trimmed.startsWith("*\u2063") || !trimmed.endsWith("\u2063*")) return null;
+  const body = trimmed.slice(2, -2);
+  if (!body) return null;
+  // Mirror REASONING_ESCAPES from the Rust side exactly.
+  return body.replace(/\\([\\*_`[\]<>&~|$])/g, "$1");
+}
+
 /** Split source into block-level nodes. Fenced code is taken verbatim first. */
 function parseBlocks(text) {
   const out = [];
@@ -487,6 +505,18 @@ function parseBlocks(text) {
       code.textContent = body.join("\n");
       pre.append(code);
       out.push(pre);
+      continue;
+    }
+
+    // A reasoning line is jcode's own marker, not user-visible markdown.
+    const reasoning = reasoningLineContent(line);
+    if (reasoning !== null) {
+      flushParagraph(para);
+      const div = document.createElement("div");
+      div.className = "reasoning-line";
+      div.textContent = reasoning;
+      out.push(div);
+      i += 1;
       continue;
     }
 

@@ -486,3 +486,23 @@ test("display math indented under a list item renders", () => {
   );
   assert.ok(root.textContent.includes("Next"), "the next item still parses");
 });
+
+test("jcode reasoning lines unwrap instead of showing their markers", () => {
+  // `*<U+2063>...<U+2063>*` with escaped inner markdown is jcode's reasoning
+  // protocol (jcode-render-core/src/reasoning.rs). On the deployed app it
+  // surfaced as literal "**Clarifying ...**" with invisible separators.
+  const root = render("*\u2063\\*\\*Clarifying circular motion\\*\\*\u2063*");
+  const line = root.children.find((c) => c.classList.contains("reasoning-line"));
+  assert.ok(line, "recognized as a reasoning line");
+  assert.strictEqual(line.textContent, "**Clarifying circular motion**");
+  assert.ok(!root.textContent.includes("\u2063"), "separators are consumed");
+});
+
+test("ordinary emphasis is not mistaken for a reasoning line", () => {
+  const root = render("*just italic*");
+  assert.strictEqual(
+    root.children.filter((c) => c.classList.contains("reasoning-line")).length,
+    0,
+  );
+  assert.strictEqual(root.count("em"), 1);
+});

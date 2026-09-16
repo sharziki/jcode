@@ -533,6 +533,13 @@ button.ghost.danger {
   overflow-x: auto;
 }
 
+/* Reasoning lines: present but quieter than the answer, matching the TUI. */
+.msg .reasoning-line {
+  color: var(--text-2);
+  font-style: italic;
+  margin: 2px 0 8px;
+}
+
 .msg del {
   /* --text-3 measured 3.21:1 on the bubble surface; strikethrough still has to
      be readable, so use the brighter secondary token. */
