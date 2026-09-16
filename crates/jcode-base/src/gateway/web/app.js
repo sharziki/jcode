@@ -1,424 +1,341 @@
-/*
- * jcode web client.
- *
- * Talks the same wire protocol as the TUI and the iOS app:
- *   POST /pair      6-digit code  -> long-lived token
- *   GET  /sessions  token         -> recent session metadata
- *   GET  /ws        token         -> NDJSON request/event stream
- *
- * State lives in three screens (pair, sessions, chat) driven by a single
- * reducer over server events, mirroring ios/Sources/JCodeKit/SessionReducer.swift.
- */
+/* jcode's paired mobile client. Native protocol, one socket, no dependencies. */
 "use strict";
 
-// ----------------------------------------------------------------- storage
-
-const STORE_KEY = "jcode.credentials.v1";
-
-/**
- * Credentials are per-origin: one browser can be paired with several servers
- * (laptop, desktop) and each keeps its own token.
- */
-const credentials = {
-  load() {
-    try {
-      const raw = localStorage.getItem(STORE_KEY);
-      if (!raw) return null;
-      const all = JSON.parse(raw);
-      return all[location.host] || null;
-    } catch {
-      return null;
-    }
-  },
-  save(value) {
-    let all = {};
-    try {
-      all = JSON.parse(localStorage.getItem(STORE_KEY) || "{}");
-    } catch {
-      all = {};
-    }
-    all[location.host] = value;
-    localStorage.setItem(STORE_KEY, JSON.stringify(all));
-  },
-  clear() {
-    let all = {};
-    try {
-      all = JSON.parse(localStorage.getItem(STORE_KEY) || "{}");
-    } catch {
-      all = {};
-    }
-    delete all[location.host];
-    localStorage.setItem(STORE_KEY, JSON.stringify(all));
-  },
+const $ = (id) => document.getElementById(id);
+const el = {};
+for (const id of [
+  "pair-view", "pair-form", "pair-code", "pair-submit", "device-name", "pair-status", "pair-host",
+  "sessions-view", "session-list", "sessions-empty", "sessions-status", "sessions-refresh", "sessions-unpair",
+  "chat-view", "chat-back", "chat-title", "chat-phase", "transcript", "status-line", "composer",
+  "composer-input", "composer-send", "composer-stop",
+]) el[id.replace(/-([a-z])/g, (_, c) => c.toUpperCase())] = $(id);
+const on = (id, event, handler) => $(id)?.addEventListener(event, handler);
+const storage = {
+  get(key, fallback = null) { try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; } },
+  set(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); return true; } catch { return false; } },
 };
-
-/** Stable per-browser device id, so re-pairing replaces rather than duplicates. */
+const STORE_KEY = "jcode.credentials.v1";
+const credentials = {
+  load() { return storage.get(STORE_KEY, {})[location.host] || null; },
+  save(value) { const all = storage.get(STORE_KEY, {}); all[location.host] = value; storage.set(STORE_KEY, all); },
+  clear() { const all = storage.get(STORE_KEY, {}); delete all[location.host]; storage.set(STORE_KEY, all); },
+};
 function deviceID() {
-  let id = localStorage.getItem("jcode.device-id");
+  let id;
+  try { id = localStorage.getItem("jcode.device-id"); } catch { /* private browsing */ }
   if (!id) {
-    id =
-      (crypto.randomUUID && crypto.randomUUID()) ||
-      "web-" + Math.random().toString(16).slice(2) + Date.now().toString(16);
-    localStorage.setItem("jcode.device-id", id);
+    id = globalThis.crypto?.randomUUID?.() || "web-" + Math.random().toString(16).slice(2);
+    try { localStorage.setItem("jcode.device-id", id); } catch { /* pairing still works */ }
   }
   return id;
 }
-
-/** A human-recognizable default name for the pairing screen. */
 function defaultDeviceName() {
   const ua = navigator.userAgent;
-  if (/iPhone/.test(ua)) return "iPhone (web)";
-  if (/iPad/.test(ua)) return "iPad (web)";
-  if (/Android/.test(ua)) return "Android (web)";
-  if (/Mac OS X/.test(ua)) return "Mac (web)";
-  if (/Windows/.test(ua)) return "Windows (web)";
+  for (const [pattern, name] of [[/iPhone/, "iPhone"], [/iPad/, "iPad"], [/Android/, "Android"], [/Mac OS X/, "Mac"], [/Windows/, "Windows"]]) {
+    if (pattern.test(ua)) return `${name} (web)`;
+  }
   return "Browser";
 }
-
-// ---------------------------------------------------------------- elements
-
-const $ = (id) => document.getElementById(id);
-const el = {
-  pairView: $("pair-view"),
-  pairForm: $("pair-form"),
-  pairCode: $("pair-code"),
-  pairSubmit: $("pair-submit"),
-  deviceName: $("device-name"),
-  pairStatus: $("pair-status"),
-  pairHost: $("pair-host"),
-
-  sessionsView: $("sessions-view"),
-  sessionList: $("session-list"),
-  sessionsEmpty: $("sessions-empty"),
-  sessionsStatus: $("sessions-status"),
-  sessionsRefresh: $("sessions-refresh"),
-  sessionsUnpair: $("sessions-unpair"),
-
-  chatView: $("chat-view"),
-  chatBack: $("chat-back"),
-  chatTitle: $("chat-title"),
-  chatPhase: $("chat-phase"),
-  transcript: $("transcript"),
-  statusLine: $("status-line"),
-  composer: $("composer"),
-  composerInput: $("composer-input"),
-  composerSend: $("composer-send"),
-  composerStop: $("composer-stop"),
-};
-
-function show(view) {
-  for (const v of [el.pairView, el.sessionsView, el.chatView]) {
-    v.hidden = v !== view;
-  }
-}
-
 function setStatus(node, text, kind) {
+  if (!node) return;
   node.textContent = text || "";
   if (kind) node.dataset.kind = kind;
   else delete node.dataset.kind;
 }
+function show(view) {
+  el.pairView.hidden = view !== el.pairView;
+  el.chatView.hidden = view !== el.chatView;
+}
+const dialogFocus = new WeakMap();
+function openDialog(id) {
+  const dialog = $(id);
+  if (!dialog || dialog.open) return;
+  dialogFocus.set(dialog, document.activeElement);
+  dialog.hidden = false;
+  dialog.showModal();
+}
+function closeDialog(id) { const dialog = $(id); if (dialog?.open) dialog.close(); }
+function closeDialogs() { document.querySelectorAll("dialog[open]").forEach((d) => d.close()); }
+let toastTimer;
+function toast(text) {
+  const node = $("toast"); if (!node) return;
+  setStatus(node, text); node.hidden = !text; clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { node.hidden = true; }, 5000);
+}
 
-// ------------------------------------------------------------------ pairing
+// Drafts and unacknowledged sends are both durable, scoped to this origin/session.
+let draftSession = "new";
+function draftKey(id = draftSession) { return `jcode.draft.v2:${location.origin}:${id}`; }
+function draftRecord(id = draftSession) { return storage.get(draftKey(id), { text: "", pending: [] }); }
+function saveDraft() {
+  const record = draftRecord();
+  record.text = el.composerInput.value;
+  if (!storage.set(draftKey(), record)) toast("Draft storage is unavailable in this browser.");
+}
+function loadDraft(id) {
+  draftSession = id || "new";
+  const record = draftRecord();
+  // An unacknowledged send is never silently discarded on reload.
+  el.composerInput.value = [record.text, ...(record.pending || []).map((p) => p.content)].filter(Boolean).join("\n\n");
+  if (record.pending?.length) toast("A message had unconfirmed delivery. Review the restored draft before resending.");
+  record.text = el.composerInput.value;
+  record.pending = [];
+  storage.set(draftKey(), record);
+  resizeComposer();
+}
+function migrateDraft(id) {
+  if (!id || draftSession === id) return;
+  const record = draftRecord();
+  storage.set(draftKey(id), record);
+  storage.set(draftKey(), { text: "", pending: [] });
+  draftSession = id;
+}
 
 async function pair(code, name) {
   const response = await fetch("/pair", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      code,
-      device_id: deviceID(),
-      device_name: name || defaultDeviceName(),
-    }),
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ code, device_id: deviceID(), device_name: name || defaultDeviceName() }),
   });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(data.error || `Pairing failed (HTTP ${response.status})`);
-  }
+  if (!response.ok) throw new Error(data.error || `Pairing failed (HTTP ${response.status})`);
   if (!data.token) throw new Error("Server returned no token");
   return data;
 }
-
-el.pairForm.addEventListener("submit", async (event) => {
+on("pair-form", "submit", async (event) => {
   event.preventDefault();
   const code = el.pairCode.value.replace(/\D/g, "");
-  if (code.length !== 6) {
-    setStatus(el.pairStatus, "Enter the 6-digit code.", "error");
-    return;
-  }
+  if (code.length !== 6) return setStatus(el.pairStatus, "Enter the 6-digit code.", "error");
   el.pairSubmit.disabled = true;
-  setStatus(el.pairStatus, "Pairing...");
+  setStatus(el.pairStatus, "Pairing…");
   try {
     const result = await pair(code, el.deviceName.value.trim());
-    credentials.save({
-      token: result.token,
-      serverName: result.server_name,
-      serverVersion: result.server_version,
-    });
-    setStatus(el.pairStatus, "Paired.", "ok");
+    credentials.save({ token: result.token, serverName: result.server_name, serverVersion: result.server_version });
     el.pairCode.value = "";
-    await openSessions();
-  } catch (error) {
-    setStatus(el.pairStatus, error.message, "error");
-  } finally {
-    el.pairSubmit.disabled = false;
-  }
+    await newChat();
+  } catch (error) { setStatus(el.pairStatus, error.message, "error"); }
+  finally { el.pairSubmit.disabled = false; }
 });
-
-// ------------------------------------------------------------ session list
-
-function relativeTime(ms) {
-  if (!ms) return "";
-  const delta = Date.now() - ms;
-  const minute = 60000;
-  if (delta < minute) return "just now";
-  if (delta < 60 * minute) return `${Math.floor(delta / minute)}m ago`;
-  if (delta < 24 * 60 * minute) return `${Math.floor(delta / (60 * minute))}h ago`;
-  return `${Math.floor(delta / (24 * 60 * minute))}d ago`;
-}
-
-/** Collapse an absolute working dir to something readable on a phone. */
-function shortPath(path) {
-  if (!path) return "";
-  return path.replace(/^\/home\/[^/]+/, "~").replace(/^\/Users\/[^/]+/, "~");
-}
-
-async function fetchSessions(token) {
-  const response = await fetch("/sessions?limit=60", {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (response.status === 401) throw new Error("unauthorized");
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  const data = await response.json();
-  return data.sessions || [];
-}
-
-async function openSessions() {
-  const creds = credentials.load();
-  if (!creds) return openPairing();
-  show(el.sessionsView);
-  setStatus(el.sessionsStatus, "Loading sessions...");
-  // Hide the empty block while loading and on failure: "No sessions yet" would
-  // misreport a server we simply could not reach.
-  el.sessionsEmpty.hidden = true;
-  try {
-    const sessions = await fetchSessions(creds.token);
-    renderSessions(sessions);
-    // The empty block already explains the empty case; repeating it here would
-    // be redundant.
-    setStatus(el.sessionsStatus, sessions.length ? `${sessions.length} sessions` : "");
-  } catch (error) {
-    if (error.message === "unauthorized") {
-      credentials.clear();
-      openPairing("This device is no longer paired. Enter a new code.");
-      return;
-    }
-    setStatus(el.sessionsStatus, `Could not load sessions: ${error.message}`, "error");
-  }
-}
-
-function renderSessions(sessions) {
-  el.sessionList.textContent = "";
-  // An empty list is a legitimate state (a brand-new pairing), not a failure.
-  // Show an explanation instead of a blank screen, and let the empty block take
-  // the space so it centers rather than stranding text at the bottom.
-  el.sessionsEmpty.hidden = sessions.length > 0;
-  el.sessionList.style.flex = sessions.length ? "" : "0";
-  for (const session of sessions) {
-    const item = document.createElement("li");
-
-    const title = document.createElement("span");
-    title.className = "session-title";
-    title.textContent = session.title || session.id;
-    item.append(title);
-
-    const meta = document.createElement("span");
-    meta.className = "session-meta";
-    const parts = [];
-    if (session.live) parts.push("live");
-    const when = relativeTime(session.updated_at_ms);
-    if (when) parts.push(when);
-    const dir = shortPath(session.working_dir);
-    if (dir) parts.push(dir);
-    meta.textContent = parts.join("  ·  ");
-    if (session.live) meta.classList.add("session-live");
-    item.append(meta);
-
-    item.addEventListener("click", () => openChat(session));
-    el.sessionList.append(item);
-  }
-}
-
-el.sessionsRefresh.addEventListener("click", () => openSessions());
-
-el.sessionsUnpair.addEventListener("click", () => {
-  if (!confirm("Forget this server on this device?")) return;
-  connection.stop();
-  credentials.clear();
-  openPairing("Unpaired.");
-});
-
 function openPairing(message) {
+  saveDraft();
+  connection.stop();
+  closeDialogs();
   show(el.pairView);
   el.pairHost.textContent = `Server: ${location.host}`;
-  el.deviceName.value = el.deviceName.value || defaultDeviceName();
+  el.deviceName.value ||= defaultDeviceName();
   setStatus(el.pairStatus, message || "", message ? "error" : null);
   el.pairCode.focus();
 }
-
-// -------------------------------------------------------------- connection
-
-/**
- * One reconnecting WebSocket to the gateway.
- *
- * Reconnect uses capped exponential backoff, except after a `reloading` event
- * where the server is expected back immediately, and stops entirely on 401 or
- * an explicit server close request (retrying either can never succeed).
- */
-const connection = {
-  socket: null,
-  token: null,
-  sessionID: null,
-  nextRequestID: 1,
-  attempt: 0,
-  timer: null,
-  stopped: true,
-  /** Request id of the `subscribe` for the current socket. */
-  attachRequestID: null,
-  /** Set once the server accepts the attach, so retries can be distinguished. */
-  attached: false,
-  /** Reason the server refused to attach; retrying it can never succeed. */
-  fatalReason: null,
-
-  start(token, sessionID) {
-    this.stop();
-    this.stopped = false;
-    this.token = token;
-    this.sessionID = sessionID;
-    this.attempt = 0;
-    this.fatalReason = null;
-    this.open();
-  },
-
-  stop() {
-    this.stopped = true;
-    clearTimeout(this.timer);
-    if (this.socket) {
-      this.socket.onclose = null;
-      this.socket.onerror = null;
-      this.socket.onmessage = null;
-      try {
-        this.socket.close();
-      } catch {
-        /* already closing */
-      }
-      this.socket = null;
-    }
-  },
-
-  open() {
-    const scheme = location.protocol === "https:" ? "wss" : "ws";
-    // Browsers cannot set headers on a WebSocket handshake, so the gateway's
-    // documented query-token fallback is the only option here.
-    const url = `${scheme}://${location.host}/ws?token=${encodeURIComponent(this.token)}`;
-    setPhase(this.attempt === 0 ? "connecting" : "reconnecting");
-
-    let socket;
-    try {
-      socket = new WebSocket(url);
-    } catch {
-      this.scheduleReconnect();
-      return;
-    }
-    this.socket = socket;
-
-    socket.onopen = () => {
-      this.attempt = 0;
-      setPhase("connected");
-      this.attachRequestID = this.nextRequestID;
-      this.attached = false;
-      this.send({ type: "subscribe", target_session_id: this.sessionID });
-      this.send({ type: "get_history" });
-    };
-
-    socket.onmessage = (event) => {
-      // A single frame may carry several newline-delimited events.
-      for (const line of String(event.data).split("\n")) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-        let parsed;
-        try {
-          parsed = JSON.parse(trimmed);
-        } catch {
-          continue;
-        }
-        handleEvent(parsed);
-      }
-    };
-
-    socket.onclose = (event) => {
-      if (this.stopped) return;
-      this.socket = null;
-      // 1008/4401-style auth rejections and handshake 401s both surface as an
-      // abnormal close; a failed handshake never reached onopen.
-      if (event.code === 1008) {
-        setPhase("failed", "unpaired");
-        credentials.clear();
-        openPairing("This device is no longer paired. Enter a new code.");
-        return;
-      }
-      // The server refused the attach and then closed. Reconnecting replays the
-      // same rejected subscribe forever, which looks like a flaky network and
-      // hides an error the server already explained. Stop and say why.
-      if (this.fatalReason) {
-        setPhase("failed", "unavailable");
-        addMessage("error", this.fatalReason);
-        setStatusLine("");
-        return;
-      }
-      this.scheduleReconnect();
-    };
-
-    socket.onerror = () => {
-      /* onclose always follows; reconnect is handled there. */
-    };
-  },
-
-  scheduleReconnect() {
-    if (this.stopped) return;
-    this.attempt += 1;
-    setPhase("reconnecting");
-    const delay = Math.min(1000 * 2 ** (this.attempt - 1), 30000);
-    clearTimeout(this.timer);
-    this.timer = setTimeout(() => this.open(), delay);
-  },
-
-  /** Reconnect immediately, for a server that just announced a reload. */
-  reconnectSoon() {
-    if (this.stopped) return;
-    clearTimeout(this.timer);
-    this.timer = setTimeout(() => this.open(), 500);
-  },
-
-  send(request) {
-    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return false;
-    const payload = { id: this.nextRequestID++, ...request };
-    this.socket.send(JSON.stringify(payload));
-    return true;
-  },
-};
-
-function setPhase(phase, label) {
-  el.chatPhase.dataset.phase = phase;
-  el.chatPhase.textContent =
-    label ||
-    { connected: "live", connecting: "connecting", reconnecting: "reconnecting", failed: "offline", disconnected: "offline" }[
-      phase
-    ] ||
-    phase;
+function unauthorized() {
+  credentials.clear();
+  openPairing("This device is no longer paired. Enter a new code.");
 }
 
-// ---------------------------------------------------------------- rendering
+// Directory refresh never opens a socket and never overlaps another refresh.
+let sessions = [];
+let directoryRequest = null;
+let directoryTimer = null;
+let showAll = false;
+let workingDir = "";
+let directoryLoaded = false;
+function relativeTime(ms) {
+  if (!ms) return "";
+  const minutes = Math.max(0, Math.floor((Date.now() - ms) / 60000));
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  if (minutes < 1440) return `${Math.floor(minutes / 60)}h ago`;
+  return `${Math.floor(minutes / 1440)}d ago`;
+}
+function shortPath(path) { return (path || "").replace(/^\/home\/[^/]+/, "~").replace(/^\/Users\/[^/]+/, "~"); }
+function validDirectory(path) { return typeof path === "string" && /^(\/|[A-Za-z]:[\\/])/.test(path) && !/[\x00-\x1f]/.test(path); }
+function availableDirectories() {
+  return [...new Set(sessions.filter((s) => validDirectory(s.working_dir)).map((s) => s.working_dir))];
+}
+async function fetchSessions(token) {
+  const response = await fetch("/sessions?limit=200", { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" });
+  if (response.status === 401 || response.status === 403) throw new Error("unauthorized");
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const data = await response.json();
+  return Array.isArray(data.sessions) ? data.sessions : [];
+}
+function scheduleDirectory() {
+  clearTimeout(directoryTimer);
+  if (document.visibilityState === "visible" && credentials.load()) directoryTimer = setTimeout(refreshSessions, 3000);
+}
+async function refreshSessions() {
+  if (directoryRequest) return directoryRequest;
+  if (document.visibilityState !== "visible") return;
+  const creds = credentials.load();
+  if (!creds) return;
+  clearTimeout(directoryTimer);
+  if (!directoryLoaded) setStatus(el.sessionsStatus, "Loading conversations…");
+  directoryRequest = (async () => {
+    try {
+      const result = await fetchSessions(creds.token);
+      if (credentials.load()?.token !== creds.token) return;
+      sessions = result.sort((a, b) => (b.updated_at_ms || 0) - (a.updated_at_ms || 0));
+      directoryLoaded = true;
+      if (!workingDir && !connection.sessionID) workingDir = availableDirectories()[0] || "";
+      updateProjects();
+      renderSessions();
+      const active = sessions.find((s) => s.id === connection.sessionID);
+      if (active) {
+        view.knownTitle = active.title || "New conversation"; el.chatTitle.textContent = view.knownTitle;
+        if (!workingDir && validDirectory(active.working_dir)) workingDir = active.working_dir;
+      }
+      updateComposer();
+    } catch (error) {
+      if (error.message === "unauthorized") unauthorized();
+      else setStatus(el.sessionsStatus, `Could not refresh conversations: ${error.message}. Use Refresh to retry.`, "error");
+    } finally { directoryRequest = null; scheduleDirectory(); }
+  })();
+  return directoryRequest;
+}
+function filteredSessions() {
+  const query = ($("session-search")?.value || "").trim().toLowerCase();
+  const project = $("project-filter")?.value || "";
+  return sessions.filter((s) => {
+    // Unknown-count legacy sessions must remain discoverable by default.
+    if (!showAll && s.message_count === 0 && !s.saved) return false;
+    if (project && s.working_dir !== project) return false;
+    return !query || [s.title, s.preview, s.working_dir].some((v) => String(v || "").toLowerCase().includes(query));
+  });
+}
+function renderSessions() {
+  const visible = filteredSessions();
+  const signature = JSON.stringify([visible, connection.sessionID, showAll, $("session-search")?.value, $("project-filter")?.value]);
+  setStatus(el.sessionsStatus, `${visible.length} conversation${visible.length === 1 ? "" : "s"}${!showAll && sessions.some((s) => s.message_count === 0 && !s.saved) ? " · Empty chats hidden. Show all to see them." : ""}`);
+  // Do not destroy keyboard focus in the drawer every three seconds.
+  if (el.sessionList.dataset.signature === signature) return;
+  el.sessionList.dataset.signature = signature;
+  const focusedID = document.activeElement?.dataset.sessionId;
+  el.sessionList.textContent = "";
+  el.sessionsEmpty.hidden = visible.length > 0;
+  if (!visible.length) {
+    setStatus(el.sessionsEmpty, sessions.length ? "No conversations match. Clear search or project filters, or show all conversations." : "No conversations yet. Start a new chat below.");
+  }
+  let previousGroup = "";
+  for (const session of visible) {
+    const age = Date.now() - (session.updated_at_ms || 0);
+    const group = age < 86400000 ? "Today" : age < 604800000 ? "Previous 7 days" : "Earlier";
+    if (group !== previousGroup) {
+      const heading = document.createElement("li"); heading.className = "session-group"; heading.textContent = group;
+      el.sessionList.append(heading); previousGroup = group;
+    }
+    const item = document.createElement("li");
+    const button = document.createElement("button"); button.type = "button"; button.className = "session-row";
+    button.dataset.sessionId = session.id;
+    if (session.id === connection.sessionID) button.setAttribute("aria-current", "page");
+    const title = document.createElement("span"); title.className = "session-title"; title.textContent = session.title || "New conversation";
+    const preview = document.createElement("span"); preview.className = "session-preview"; preview.textContent = session.preview || "";
+    const meta = document.createElement("span"); meta.className = "session-meta";
+    meta.textContent = [shortPath(session.working_dir), relativeTime(session.updated_at_ms)].filter(Boolean).join(" · ");
+    button.append(title, preview, meta);
+    if (session.live) { const live = document.createElement("span"); live.className = "session-live"; live.textContent = "Live"; button.append(live); }
+    button.addEventListener("click", () => openChat(session)); item.append(button); el.sessionList.append(item);
+    if (focusedID === session.id) button.focus({ preventScroll: true });
+  }
+}
+function updateProjects() {
+  const select = $("project-filter");
+  const paths = availableDirectories();
+  if (select && select.dataset.paths !== JSON.stringify(paths)) {
+    const selected = select.value;
+    select.textContent = "";
+    for (const path of ["", ...paths]) { const option = document.createElement("option"); option.value = path; option.textContent = path ? shortPath(path) : "All projects"; select.append(option); }
+    select.value = paths.includes(selected) ? selected : "";
+    select.dataset.paths = JSON.stringify(paths);
+  }
+  const list = $("project-list");
+  if (list) {
+    list.textContent = "";
+    for (const path of paths) {
+      const button = document.createElement("button"); button.type = "button"; button.className = "project-option"; button.textContent = shortPath(path);
+      button.addEventListener("click", () => chooseProject(path)); list.append(button);
+    }
+  }
+}
+async function openSessions() { openDialog("sessions-view"); await refreshSessions(); }
 
+// One transport. Every replacement detaches handlers and closes the stale socket.
+const connection = {
+  socket: null, token: null, sessionID: null, nextRequestID: 1, attempt: 0, timer: null,
+  stopped: true, attached: false, fatalReason: null, attachRequestID: null,
+  historyRequestID: null, catalogRequests: new Set(), requests: new Map(),
+  start(token, sessionID) {
+    this.stop(); this.stopped = false; this.token = token; this.sessionID = sessionID || null;
+    this.attempt = 0; this.fatalReason = null; this.open();
+  },
+  closeSocket() {
+    const socket = this.socket; this.socket = null; this.attached = false;
+    if (socket) { socket.onopen = socket.onmessage = socket.onclose = socket.onerror = null; try { socket.close(); } catch { /* already closed */ } }
+  },
+  stop() { this.stopped = true; clearTimeout(this.timer); this.closeSocket(); this.catalogRequests.clear(); this.requests.clear(); },
+  open() {
+    if (this.stopped || !this.token || document.visibilityState !== "visible") return;
+    clearTimeout(this.timer); this.closeSocket();
+    this.catalogRequests.clear(); this.requests.clear();
+    view.modelRequest = null; view.renameRequest = null;
+    renderModels();
+    setPhase(this.attempt ? "reconnecting" : "connecting");
+    let socket;
+    try { socket = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws?token=${encodeURIComponent(this.token)}`); }
+    catch { this.scheduleReconnect(); return; }
+    this.socket = socket;
+    socket.onopen = () => {
+      if (this.socket !== socket || this.stopped) return;
+      this.attempt = 0;
+      setPhase("connecting", "Loading conversation…");
+      const request = { type: "subscribe", continue_on_disconnect: true };
+      if (this.sessionID) request.target_session_id = this.sessionID;
+      else request.working_dir = workingDir;
+      this.attachRequestID = this.send(request);
+      this.historyRequestID = this.send({ type: "get_history" });
+    };
+    socket.onmessage = (message) => {
+      if (this.socket !== socket) return;
+      for (const line of String(message.data).split("\n")) {
+        if (!line.trim()) continue;
+        let event; try { event = JSON.parse(line); } catch { continue; }
+        if (event && typeof event === "object") handleEvent(event);
+      }
+    };
+    socket.onclose = (event) => {
+      if (this.socket !== socket || this.stopped) return;
+      this.socket = null; this.attached = false; updateComposer();
+      if ([1008, 4401, 4403].includes(event.code)) return unauthorized();
+      if (this.fatalReason) { setPhase("failed", "Unavailable"); return; }
+      // Browsers hide HTTP handshake status. The authenticated directory detects revocation.
+      refreshSessions();
+      this.scheduleReconnect();
+    };
+    socket.onerror = () => {};
+  },
+  scheduleReconnect() {
+    if (this.stopped || this.fatalReason) return;
+    this.attempt += 1; setPhase("reconnecting"); clearTimeout(this.timer);
+    if (document.visibilityState === "visible") this.timer = setTimeout(() => this.open(), Math.min(1000 * 2 ** Math.min(this.attempt - 1, 5), 30000));
+  },
+  reconnectSoon() {
+    if (this.stopped) return;
+    this.closeSocket(); clearTimeout(this.timer); setPhase("reconnecting");
+    this.timer = setTimeout(() => this.open(), 500);
+  },
+  send(request) {
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return false;
+    const id = this.nextRequestID++;
+    try { this.socket.send(JSON.stringify({ id, ...request })); this.requests.set(id, request.type); return id; }
+    catch { return false; }
+  },
+  catalog() { if (!this.attached) return; const id = this.send({ type: "get_model_catalog" }); if (id) this.catalogRequests.add(id); },
+};
+function setPhase(phase, label) {
+  el.chatPhase.dataset.phase = phase;
+  el.chatPhase.hidden = phase === "new";
+  el.chatPhase.textContent = label || ({ connected: "Connected", connecting: "Connecting…", reconnecting: "Reconnecting…", failed: "Offline", disconnected: "Not connected", new: "" }[phase] || phase);
+  updateComposer();
+}
+
+// The injection-safe markdown/math renderer below is intentionally unchanged.
 /**
  * Minimal, injection-safe markdown: fenced code, inline code, bold.
  * Text is inserted via textContent at every step, so server or model output
@@ -963,392 +880,405 @@ function buildLink(href, label) {
   return a;
 }
 
-/** True when the user is near the bottom, so we only autoscroll when following. */
-function isPinnedToBottom() {
-  const node = el.transcript;
-  return node.scrollHeight - node.scrollTop - node.clientHeight < 80;
+// Transcript mutations capture the scroll position BEFORE growing the content.
+function isPinnedToBottom() { const n = el.transcript; return n.scrollHeight - n.scrollTop - n.clientHeight < 80; }
+function updateJump() { if ($("jump-latest")) $("jump-latest").hidden = isPinnedToBottom(); }
+function scrollToBottom(force = false) { if (force) el.transcript.scrollTop = el.transcript.scrollHeight; updateJump(); }
+function updateWelcome() { if ($("welcome")) $("welcome").hidden = el.transcript.children.length > 0; }
+async function copyText(text) {
+  if (navigator.clipboard?.writeText) { try { await navigator.clipboard.writeText(text); return; } catch { /* HTTP or denied: use selection */ } }
+  const focused = document.activeElement;
+  const input = document.createElement("textarea"); input.value = text; input.style.position = "fixed"; input.style.opacity = "0";
+  document.body.append(input); input.select();
+  try { if (!document.execCommand("copy")) throw new Error("Copy is unavailable. Select the response to copy it."); }
+  finally { input.remove(); focused?.focus({ preventScroll: true }); }
 }
-
-function scrollToBottom(force) {
-  if (force || isPinnedToBottom()) {
-    el.transcript.scrollTop = el.transcript.scrollHeight;
+function addCopy(node, text) {
+  if (!text) return;
+  const button = document.createElement("button"); button.type = "button"; button.className = "message-copy";
+  button.textContent = "Copy"; button.setAttribute("aria-label", "Copy response");
+  button.addEventListener("click", async () => {
+    try { await copyText(text); toast("Response copied."); } catch (error) { toast(error.message); }
+  });
+  node.append(button);
+}
+function renderMessage(node, text, copy = false) {
+  renderMarkdown(node, text);
+  // Preserve the renderer, but put its historical reasoning markers in disclosures.
+  for (const line of [...node.querySelectorAll(".reasoning-line")]) {
+    const details = document.createElement("details"); details.className = "trace reasoning";
+    const summary = document.createElement("summary"); summary.textContent = "Thinking";
+    line.replaceWith(details); details.append(summary, line);
   }
+  if (copy) addCopy(node, text);
 }
-
 function addMessage(role, text) {
   const pinned = isPinnedToBottom();
-  const node = document.createElement("div");
-  node.className = `msg ${role}`;
-  renderMarkdown(node, text);
-  el.transcript.append(node);
-  scrollToBottom(pinned);
-  return node;
+  const node = document.createElement("div"); node.className = `msg ${role}`;
+  renderMessage(node, text, role === "assistant"); el.transcript.append(node);
+  updateWelcome(); scrollToBottom(pinned); return node;
 }
-
-// ------------------------------------------------------------------ reducer
-
-/** Live view state for the attached session. */
 const view = {
-  streaming: null, // assistant bubble currently receiving text deltas
-  streamingText: "",
-  reasoning: null, // reasoning trace block
-  reasoningText: "",
-  tools: new Map(), // tool id -> { node, body, input }
-  pendingToolInput: null, // tool whose input is still streaming
-  processing: false,
-  knownTitle: "", // title from the session list, used until the server sends one
+  streaming: null, streamingText: "", reasoning: null, reasoningText: "", tools: new Map(), pendingToolInput: null,
+  processing: false, stopping: false, knownTitle: "", model: "", models: [], optimistic: [],
+  modelRequest: null, renameRequest: null, queuedSend: false,
 };
-
 function resetView() {
-  el.transcript.textContent = "";
-  view.streaming = null;
-  view.streamingText = "";
-  view.reasoning = null;
-  view.reasoningText = "";
-  view.tools.clear();
-  view.pendingToolInput = null;
-  setProcessing(false);
-  setStatusLine("");
+  el.transcript.textContent = ""; view.streaming = null; view.streamingText = ""; view.reasoning = null; view.reasoningText = "";
+  view.tools.clear(); view.pendingToolInput = null; view.optimistic = [];
+  setProcessing(false); setStatusLine(""); updateWelcome(); updateJump();
 }
-
-function setProcessing(active) {
-  view.processing = active;
-  el.composerStop.hidden = !active;
-  el.composerSend.hidden = active;
+function updateComposer() {
+  const attached = connection.attached && connection.socket?.readyState === WebSocket.OPEN;
+  el.composerSend.hidden = false; // Follow-up remains available while a turn is running.
+  el.composerSend.disabled = !el.composerInput.value.trim() || (!attached && !connection.stopped) || Boolean(connection.fatalReason);
+  el.composerSend.setAttribute("aria-label", view.processing ? "Send follow-up" : "Send message");
+  el.composerStop.hidden = !view.processing;
+  el.composerStop.disabled = !attached || view.stopping;
+  el.chatView.dataset.processing = String(view.processing);
+  if ($("composer-model-name")) $("composer-model-name").textContent = view.model || "Choose model";
+  if ($("composer-project-name")) $("composer-project-name").textContent = shortPath(workingDir).split("/").pop() || shortPath(workingDir) || "Choose project";
+  if ($("composer-project")) $("composer-project").disabled = Boolean(connection.sessionID);
+  setStatus($("composer-hint"), view.stopping ? "Stopping…" : view.processing ? "You can send a follow-up while Jcode works." : "");
 }
-
-function setStatusLine(text) {
-  el.statusLine.textContent = text || "";
-  el.statusLine.hidden = !text;
-}
-
-/** Finish the streaming bubble, if any, and drop the caret. */
+function setProcessing(active) { view.processing = active; if (!active) view.stopping = false; updateComposer(); }
+function setStatusLine(text) { el.statusLine.textContent = text || ""; el.statusLine.hidden = !text; }
 function endStreaming() {
-  if (view.streaming) {
-    view.streaming.classList.remove("streaming");
-    view.streaming = null;
-    view.streamingText = "";
-  }
-  if (view.reasoning) {
-    view.reasoning = null;
-    view.reasoningText = "";
-  }
+  if (view.streaming) { view.streaming.classList.remove("streaming"); addCopy(view.streaming, view.streamingText); }
+  view.streaming = null; view.streamingText = ""; view.reasoning = null; view.reasoningText = "";
 }
-
 function appendDelta(text) {
   const pinned = isPinnedToBottom();
-  if (!view.streaming) {
-    view.streaming = addMessage("assistant", "");
-    view.streaming.classList.add("streaming");
-    view.streamingText = "";
-  }
-  view.streamingText += text;
-  renderMarkdown(view.streaming, view.streamingText);
-  scrollToBottom(pinned);
+  if (!view.streaming) { view.streaming = addMessage("assistant", ""); view.streaming.classList.add("streaming"); view.streamingText = ""; }
+  view.streamingText += text; renderMessage(view.streaming, view.streamingText); scrollToBottom(pinned);
 }
-
 function appendReasoning(text) {
   const pinned = isPinnedToBottom();
   if (!view.reasoning) {
-    view.reasoning = document.createElement("div");
-    view.reasoning.className = "trace";
-    el.transcript.append(view.reasoning);
-    view.reasoningText = "";
+    const details = document.createElement("details"); details.className = "trace reasoning";
+    const summary = document.createElement("summary"); summary.textContent = "Thinking";
+    const body = document.createElement("div"); body.className = "reasoning-body";
+    details.append(summary, body); el.transcript.append(details); view.reasoning = body; view.reasoningText = ""; updateWelcome();
   }
-  view.reasoningText += text;
-  view.reasoning.textContent = view.reasoningText;
-  scrollToBottom(pinned);
+  view.reasoningText += text; view.reasoning.textContent = view.reasoningText; scrollToBottom(pinned);
 }
-
 function startTool(id, name) {
+  if (view.tools.has(id)) return view.tools.get(id);
   const pinned = isPinnedToBottom();
-  const node = document.createElement("details");
-  node.className = "trace tool";
+  const node = document.createElement("details"); node.className = "trace tool";
   const summary = document.createElement("summary");
-  const label = document.createElement("span");
-  label.className = "tool-name";
-  label.textContent = name;
-  summary.append(label);
-  node.append(summary);
-  const body = document.createElement("div");
-  body.className = "tool-body";
-  node.append(body);
-  el.transcript.append(node);
-  const record = { node, summary, body, input: "" };
-  view.tools.set(id, record);
-  view.pendingToolInput = record;
-  scrollToBottom(pinned);
-  return record;
+  const label = document.createElement("span"); label.className = "tool-name"; label.textContent = name || "Tool";
+  const status = document.createElement("span"); status.className = "tool-status"; status.textContent = "Preparing";
+  summary.append(label, status);
+  const body = document.createElement("div"); body.className = "tool-body"; node.append(summary, body); el.transcript.append(node);
+  const record = { node, summary, status, body, input: "" }; view.tools.set(id, record); view.pendingToolInput = record;
+  updateWelcome(); scrollToBottom(pinned); return record;
 }
-
 function finishTool(id, name, output, error) {
-  const pinned = isPinnedToBottom();
-  const record = view.tools.get(id) || startTool(id, name);
-  view.pendingToolInput = null;
-  if (error) record.node.classList.add("failed");
-  const text = error ? `error: ${error}` : output || "";
-  // Tool output can be enormous; the full text stays available on tap.
-  record.body.textContent = text.length > 4000 ? `${text.slice(0, 4000)}\n...` : text;
+  const pinned = isPinnedToBottom(); const record = view.tools.get(id) || startTool(id, name);
+  view.pendingToolInput = null; record.node.classList.toggle("failed", Boolean(error));
+  record.status.textContent = error ? "Failed" : "Done";
+  record.body.textContent = error ? `Error: ${error}\n${output || ""}` : output || "";
   scrollToBottom(pinned);
 }
-
+function updateCatalog(event) {
+  if (typeof event.provider_model === "string") view.model = event.provider_model;
+  if (Array.isArray(event.available_models)) {
+    const routes = event.available_model_routes || [];
+    // IDs come exclusively from the server's selectable catalog, not invented labels.
+    view.models = [...new Set(event.available_models)].filter((m) => typeof m === "string").map((model) => {
+      const route = routes.find((r) => r.model === model);
+      return { model, provider: route?.provider || "", available: route?.available !== false };
+    });
+  }
+  renderModels(); updateComposer();
+}
+function renderModels() {
+  const list = $("model-list"); if (!list) return;
+  list.textContent = "";
+  const query = ($("model-search")?.value || "").toLowerCase();
+  const models = view.models.filter((m) => `${m.model} ${m.provider}`.toLowerCase().includes(query));
+  for (const model of models) {
+    const button = document.createElement("button"); button.type = "button"; button.className = "model-option";
+    button.disabled = !connection.attached || !model.available || Boolean(view.modelRequest);
+    button.setAttribute("aria-pressed", String(model.model === view.model));
+    const name = document.createElement("span"); name.textContent = model.model;
+    const provider = document.createElement("span"); provider.className = "model-provider"; provider.textContent = model.provider;
+    button.append(name); if (model.provider) button.append(provider); button.addEventListener("click", () => selectModel(model.model)); list.append(button);
+  }
+  if (!view.modelRequest) setStatus($("model-status"), models.length ? "" : connection.attached ? "No matching models are available from this server." : "Connect to load available models.");
+}
+function selectModel(model) {
+  if (!connection.attached || view.modelRequest) return;
+  view.modelRequest = connection.send({ type: "set_model", model }) || null;
+  setStatus($("model-status"), view.modelRequest ? "Changing model…" : "Not connected. Model unchanged.", view.modelRequest ? null : "error");
+  renderModels(); refreshSessions();
+}
+function acknowledge(id) {
+  const record = draftRecord(); record.pending = (record.pending || []).filter((p) => p.id !== id); storage.set(draftKey(), record);
+}
+function echoUser(content, kind = "user_message", displayRole) {
+  const optimistic = view.optimistic.find((m) => m.content === content && !m.echoes.has(kind));
+  if (optimistic) { optimistic.echoes.add(kind); acknowledge(optimistic.id); optimistic.node.dataset.pending = "false"; return; }
+  addMessage(displayRole === "system" ? "system" : "user", content);
+}
+function recoverSend(id) {
+  const record = draftRecord(); const failed = (record.pending || []).filter((p) => p.id === id);
+  if (!failed.length) return;
+  el.composerInput.value = [el.composerInput.value, ...failed.map((p) => p.content)].filter(Boolean).join("\n\n");
+  acknowledge(id); saveDraft(); resizeComposer(); updateComposer();
+  const optimistic = view.optimistic.find((p) => p.id === id);
+  if (optimistic) { optimistic.node.dataset.pending = "failed"; optimistic.node.setAttribute("aria-label", "Message not sent"); }
+}
+function acceptSession(id) {
+  if (!id) return;
+  if (!connection.sessionID) migrateDraft(id);
+  connection.sessionID = id;
+  history.replaceState({ session: id }, "", `#${encodeURIComponent(id)}`);
+  updateComposer();
+}
 function handleEvent(event) {
   switch (event.type) {
-    case "history":
-      // History only arrives once the server accepted the attach.
-      connection.attached = true;
-      connection.fatalReason = null;
-      renderHistory(event);
-      break;
-
-    case "text_delta":
-      appendDelta(event.text || "");
-      break;
-
-    case "text_replace":
-      if (!view.streaming) appendDelta("");
-      view.streamingText = event.text || "";
-      renderMarkdown(view.streaming, view.streamingText);
-      break;
-
-    case "reasoning_delta":
-      appendReasoning(event.text || "");
-      break;
-
-    case "reasoning_done":
-      view.reasoning = null;
-      view.reasoningText = "";
-      break;
-
-    case "tool_start":
-      startTool(event.id, event.name);
-      break;
-
-    case "tool_input":
-      if (view.pendingToolInput) {
-        view.pendingToolInput.input += event.delta || "";
-        view.pendingToolInput.body.textContent = view.pendingToolInput.input;
+    case "history": {
+      updateCatalog(event);
+      if (connection.catalogRequests.delete(event.id)) { connection.requests.delete(event.id); break; }
+      const preservePosition = el.transcript.children.length > 0;
+      acceptSession(event.session_id); connection.attached = true; connection.fatalReason = null;
+      renderHistory(event, preservePosition); setPhase("connected"); renderModels();
+      connection.requests.delete(event.id);
+      if (view.queuedSend) { view.queuedSend = false; sendMessage(); }
+      refreshSessions(); break;
+    }
+    case "available_models_updated": updateCatalog(event); break;
+    case "model_changed":
+      if (!event.error) { view.model = event.model || view.model; setStatus($("model-status"), "Model updated.", "ok"); closeDialog("model-dialog"); }
+      view.modelRequest = null; connection.requests.delete(event.id); updateComposer(); renderModels();
+      if (event.error) setStatus($("model-status"), event.error, "error");
+      refreshSessions(); break;
+    case "text_delta": setProcessing(true); appendDelta(event.text || ""); break;
+    case "text_replace": {
+      const pinned = isPinnedToBottom(); if (!view.streaming) appendDelta(""); view.streamingText = event.text || "";
+      renderMessage(view.streaming, view.streamingText); scrollToBottom(pinned); break;
+    }
+    case "reasoning_delta": setProcessing(true); appendReasoning(event.text || ""); break;
+    case "reasoning_done": view.reasoning = null; view.reasoningText = ""; break;
+    case "tool_start": setProcessing(true); startTool(event.id, event.name); break;
+    case "tool_exec": startTool(event.id, event.name).status.textContent = "Running"; break;
+    case "tool_input": if (view.pendingToolInput) { view.pendingToolInput.input += event.delta || ""; view.pendingToolInput.body.textContent = view.pendingToolInput.input; } break;
+    case "tool_done": finishTool(event.id, event.name, event.output, event.error); break;
+    case "message_end": endStreaming(); break; // A tool-use message is not the end of the turn.
+    case "done": {
+      const request = connection.requests.get(event.id);
+      if (!request || request === "message" || request === "cancel") { endStreaming(); setProcessing(false); setStatusLine(""); refreshSessions(); }
+      acknowledge(event.id); connection.requests.delete(event.id); break;
+    }
+    case "interrupted": endStreaming(); setProcessing(false); setStatusLine("Stopped."); refreshSessions(); break;
+    case "status_detail": setStatusLine(event.detail || ""); break;
+    case "tokens": setStatusLine(`${event.input} in / ${event.output} out`); break;
+    case "state": setProcessing(Boolean(event.is_processing)); break;
+    case "session": acceptSession(event.session_id); break;
+    case "session_renamed": {
+      const title = event.display_title || event.title || "New conversation";
+      const session = sessions.find((s) => s.id === event.session_id); if (session) session.title = title;
+      if (!event.session_id || event.session_id === connection.sessionID) { view.knownTitle = title; el.chatTitle.textContent = title; }
+      connection.requests.delete(view.renameRequest); view.renameRequest = null; closeDialog("rename-dialog"); setStatus($("rename-status"), ""); renderSessions(); refreshSessions(); break;
+    }
+    case "user_message": echoUser(event.content || event.text || "", "user_message", event.display_role); break;
+    case "soft_interrupt": echoUser(event.content || event.text || "", "soft_interrupt", event.display_role); break;
+    case "soft_interrupt_injected": echoUser(event.content || "", "soft_interrupt_injected", event.display_role); break;
+    case "error": {
+      const message = event.message || "Server error";
+      if (!connection.attached && (event.id === connection.attachRequestID || event.id === connection.historyRequestID)) {
+        connection.fatalReason = message; connection.stop(); view.queuedSend = false; setPhase("failed", "Unavailable");
       }
-      break;
-
-    case "tool_done":
-      finishTool(event.id, event.name, event.output, event.error);
-      break;
-
-    case "message_end":
-      endStreaming();
-      setProcessing(false);
-      setStatusLine("");
-      break;
-
-    case "done":
-      setProcessing(false);
-      break;
-
-    case "interrupted":
-      endStreaming();
-      setProcessing(false);
-      addMessage("system", "interrupted");
-      break;
-
-    case "status_detail":
-      setStatusLine(event.detail || "");
-      break;
-
-    case "tokens":
-      setStatusLine(`${event.input} in / ${event.output} out`);
-      break;
-
-    case "state":
-      setProcessing(Boolean(event.is_processing));
-      break;
-
-    case "session":
-      connection.sessionID = event.session_id;
-      break;
-
-    case "session_renamed":
-      el.chatTitle.textContent = event.display_title || connection.sessionID;
-      break;
-
-    case "error":
-      endStreaming();
-      setProcessing(false);
-      // An error answering the attach means this session cannot be opened at
-      // all (e.g. its transcript is gone). Record it so the close that follows
-      // reports the reason instead of reconnecting forever.
-      if (!connection.attached && event.id === connection.attachRequestID) {
-        connection.fatalReason = event.message || "This session could not be opened.";
-      }
-      addMessage("error", event.message || "Server error");
-      break;
-
-    case "reloading":
-      addMessage("system", "server reloading");
-      connection.reconnectSoon();
-      break;
-
-    case "session_close_requested":
-      connection.stop();
-      setPhase("failed", "closed");
-      addMessage("system", event.reason || "Session closed by server");
-      break;
-
-    case "compaction":
-      addMessage("system", `compacted (${event.trigger || "auto"})`);
-      break;
-
-    case "notification":
-      addMessage("system", event.message || "");
-      break;
-
-    default:
-      // Unknown event types are ignored so a newer server never breaks the app.
-      break;
+      if (event.id === view.modelRequest) { view.modelRequest = null; renderModels(); setStatus($("model-status"), message, "error"); }
+      if (event.id === view.renameRequest) { view.renameRequest = null; setStatus($("rename-status"), message, "error"); }
+      if (connection.requests.get(event.id) === "cancel") { view.stopping = false; updateComposer(); }
+      recoverSend(event.id); addMessage("error", message); connection.requests.delete(event.id); break;
+    }
+    case "reloading": setStatusLine("Server reloading…"); connection.reconnectSoon(); break;
+    case "session_close_requested": connection.stop(); setPhase("failed", "Closed"); addMessage("system", event.reason || "Session closed by server"); break;
+    case "compaction": setStatusLine(`Context compacted (${event.trigger || "auto"}).`); break;
+    case "notification": addMessage("system", event.message || ""); break;
+    default: break; // Forward compatibility: unknown events do not break the stream.
   }
 }
-
-function renderHistory(event) {
-  resetView();
-  // The server only sends display_title when the session has one. Falling back
-  // to the raw id would replace a good title from the session list with an
-  // unreadable identifier, so the known title wins over the id.
-  el.chatTitle.textContent =
-    event.display_title || view.knownTitle || event.session_id || connection.sessionID || "session";
+function renderHistory(event, preservePosition = false) {
+  const pinned = isPinnedToBottom(); const scrollTop = el.transcript.scrollTop;
+  const pending = draftRecord().pending || [];
+  resetView(); el.chatTitle.textContent = event.display_title || view.knownTitle || "New conversation";
+  const users = [];
   for (const message of event.messages || []) {
-    const role = message.role;
-    if (role === "user" || role === "assistant") {
-      if (message.content) addMessage(role, message.content);
-      if (message.tool_data) {
-        const data = message.tool_data;
-        const record = startTool(data.id, data.name);
-        record.input = data.input || "";
-        finishTool(data.id, data.name, data.output, data.error);
-      }
-    } else if (role === "system") {
-      // System prompts are server-side context, not conversation.
-      continue;
+    if (message.role !== "user" && message.role !== "assistant") continue;
+    if (message.content) addMessage(message.role, message.content);
+    if (message.role === "user") users.push(message.content);
+    if (message.tool_data) { const d = message.tool_data; startTool(d.id, d.name); finishTool(d.id, d.name, d.output, d.error); }
+  }
+  // Reconcile only the post-send portion of history, so an older identical prompt is not an ACK.
+  for (const p of pending) {
+    if (users.slice(p.userCount || 0).includes(p.content)) acknowledge(p.id);
+    else {
+      const node = addMessage("user", p.content); node.dataset.pending = "true";
+      view.optimistic.push({ ...p, node, echoes: new Set() });
     }
   }
-  if (event.total_tokens) {
-    setStatusLine(`${event.total_tokens[0]} in / ${event.total_tokens[1]} out`);
-  }
-  scrollToBottom(true);
+  setProcessing(Boolean(event.activity?.is_processing));
+  if (event.status_detail) setStatusLine(event.status_detail);
+  if (preservePosition && !pinned) { el.transcript.scrollTop = scrollTop; updateJump(); }
+  else scrollToBottom(true);
 }
 
-// --------------------------------------------------------------------- chat
-
-function openChat(session) {
-  const creds = credentials.load();
-  if (!creds) return openPairing();
-  show(el.chatView);
-  resetView();
-  view.knownTitle = session.title || "";
-  el.chatTitle.textContent = session.title || session.id;
-  setPhase("connecting");
-  connection.start(creds.token, session.id);
-  history.pushState({ session: session.id }, "", `#${session.id}`);
+// Navigation starts with a local welcome, and creates a real session only when needed.
+function openChat(session, push = true) {
+  if (!credentials.load()) return openPairing();
+  saveDraft(); closeDialogs(); show(el.chatView); resetView();
+  view.knownTitle = session.title || "New conversation"; view.model = session.model || ""; view.models = [];
+  view.queuedSend = false; view.modelRequest = null; view.renameRequest = null;
+  workingDir = validDirectory(session.working_dir) ? session.working_dir : "";
+  el.chatTitle.textContent = view.knownTitle; loadDraft(session.id);
+  connection.start(credentials.load().token, session.id);
+  if (push) history.pushState({ session: session.id }, "", `#${encodeURIComponent(session.id)}`);
+  refreshSessions();
 }
-
-el.chatBack.addEventListener("click", () => {
-  connection.stop();
-  setPhase("disconnected");
-  history.pushState({}, "", "#");
-  openSessions();
-});
-
-window.addEventListener("popstate", () => {
-  if (!location.hash || location.hash === "#") {
-    connection.stop();
-    if (credentials.load()) openSessions();
-    else openPairing();
+async function newChat(push = true) {
+  if (!credentials.load()) return openPairing();
+  saveDraft(); connection.stop(); connection.sessionID = null; connection.fatalReason = null;
+  closeDialogs(); show(el.chatView); resetView();
+  view.knownTitle = ""; view.model = ""; view.models = []; view.queuedSend = false; view.modelRequest = null; view.renameRequest = null;
+  workingDir = availableDirectories()[0] || "";
+  el.chatTitle.textContent = "New conversation"; loadDraft("new"); setPhase("new");
+  if (push) history.pushState({}, "", "#");
+  await refreshSessions();
+}
+function ensureSession() {
+  if (connection.attached) return true;
+  if (!connection.stopped) return false;
+  if (!validDirectory(workingDir)) {
+    setStatus($("project-status"), "Choose a project or enter an absolute working directory first."); openDialog("project-dialog"); return false;
   }
-});
-
-// Auto-grow the composer instead of scrolling a one-line box.
+  const creds = credentials.load(); if (!creds) { openPairing(); return false; }
+  connection.start(creds.token, null); return false;
+}
+function chooseProject(path) {
+  if (!validDirectory(path)) return setStatus($("project-status"), "Enter an absolute directory on the server, such as /home/you/project.", "error");
+  if (connection.sessionID) return;
+  // A pre-attach project change must not leave a stale in-flight subscribe.
+  if (!connection.stopped) connection.stop();
+  workingDir = path; closeDialog("project-dialog"); updateComposer(); refreshSessions();
+  if (view.queuedSend || $("model-dialog")?.open) ensureSession();
+}
 function resizeComposer() {
   el.composerInput.style.height = "auto";
   el.composerInput.style.height = `${Math.min(el.composerInput.scrollHeight, window.innerHeight * 0.4)}px`;
 }
-el.composerInput.addEventListener("input", resizeComposer);
-
-el.composer.addEventListener("submit", (event) => {
-  event.preventDefault();
-  sendMessage();
-});
-
-// Enter sends on a physical keyboard; on touch keyboards Enter inserts a
-// newline, because there the send button is the obvious affordance.
-el.composerInput.addEventListener("keydown", (event) => {
-  const touch = window.matchMedia("(pointer: coarse)").matches;
-  if (event.key === "Enter" && !event.shiftKey && !touch) {
-    event.preventDefault();
-    sendMessage();
-  }
-});
-
 function sendMessage() {
-  const content = el.composerInput.value.trim();
-  if (!content) return;
-  if (view.processing) {
-    // Mid-turn input becomes a soft interrupt, matching the TUI.
-    if (!connection.send({ type: "soft_interrupt", content, urgent: false })) {
-      // Keep the text in the composer: silently dropping it loses the user's
-      // words with no explanation.
-      addMessage("error", "Not connected. Message not sent.");
-      return;
-    }
-    addMessage("user", content);
-  } else {
-    if (!connection.send({ type: "message", content })) {
-      addMessage("error", "Not connected. Message not sent.");
-      return;
-    }
-    addMessage("user", content);
-    endStreaming();
-    setProcessing(true);
+  const content = el.composerInput.value.trim(); if (!content) return;
+  saveDraft();
+  if (!connection.attached) {
+    if (connection.fatalReason || (connection.sessionID && !connection.attached)) { toast("Not connected. Your draft is saved."); return; }
+    view.queuedSend = true; ensureSession(); return;
   }
-  el.composerInput.value = "";
-  resizeComposer();
-  scrollToBottom(true);
+  const request = view.processing ? { type: "soft_interrupt", content, urgent: false } : { type: "message", content };
+  const id = connection.send(request);
+  if (!id) { toast("Not connected. Message not sent. Your draft is saved."); return; }
+  const record = draftRecord();
+  const pending = { id, content, userCount: el.transcript.querySelectorAll(".msg.user").length };
+  record.pending = [...(record.pending || []), pending]; record.text = ""; storage.set(draftKey(), record);
+  const node = addMessage("user", content); node.dataset.pending = "true";
+  view.optimistic.push({ ...pending, node, echoes: new Set() });
+  if (view.optimistic.length > 100) view.optimistic.shift();
+  if (!view.processing) { endStreaming(); setProcessing(true); }
+  el.composerInput.value = ""; resizeComposer(); updateComposer(); scrollToBottom(true); refreshSessions();
 }
-
-el.composerStop.addEventListener("click", () => {
-  connection.send({ type: "cancel" });
-  setProcessing(false);
+on("composer", "submit", (event) => { event.preventDefault(); sendMessage(); });
+on("composer-input", "input", () => { resizeComposer(); saveDraft(); updateComposer(); });
+on("composer-input", "keydown", (event) => {
+  if (event.key === "Enter" && !event.shiftKey && !event.isComposing && !window.matchMedia("(pointer: coarse)").matches) { event.preventDefault(); sendMessage(); }
 });
-
-// A backgrounded tab gets its socket dropped by mobile browsers; reconnect on
-// return so the session is live again without a manual refresh.
-document.addEventListener("visibilitychange", () => {
+on("composer-stop", "click", () => {
+  if (!connection.attached || !connection.send({ type: "cancel" })) return toast("Not connected. Could not send stop.");
+  view.stopping = true; updateComposer(); setStatusLine("Stopping…"); refreshSessions();
+});
+on("chat-back", "click", openSessions);
+on("sessions-close", "click", () => closeDialog("sessions-view"));
+on("sessions-refresh", "click", refreshSessions);
+on("sessions-new", "click", () => newChat());
+on("chat-new", "click", () => newChat());
+on("session-search", "input", renderSessions);
+on("project-filter", "change", renderSessions);
+on("sessions-all", "click", () => { showAll = !showAll; $("sessions-all").setAttribute("aria-pressed", String(showAll)); renderSessions(); });
+on("jump-latest", "click", () => scrollToBottom(true));
+on("transcript", "scroll", updateJump);
+on("composer-model", "click", () => { openDialog("model-dialog"); renderModels(); if (ensureSession()) connection.catalog(); });
+on("model-search", "input", renderModels);
+on("composer-project", "click", () => { updateProjects(); if ($("project-input")) $("project-input").value = workingDir; openDialog("project-dialog"); });
+on("project-form", "submit", (event) => { event.preventDefault(); chooseProject($("project-input").value.trim()); });
+on("chat-more", "click", () => {
+  setStatus($("details-project"), workingDir || "Not selected"); setStatus($("details-model"), view.model || "Not connected");
+  setStatus($("details-session"), connection.sessionID || "New conversation");
+  if ($("rename-open")) $("rename-open").disabled = !connection.attached;
+  openDialog("more-dialog");
+});
+on("rename-open", "click", () => { closeDialog("more-dialog"); $("rename-input").value = view.knownTitle || ""; openDialog("rename-dialog"); });
+on("rename-form", "submit", (event) => {
+  event.preventDefault(); if (!connection.attached || view.renameRequest) return;
+  const title = $("rename-input").value.trim();
+  view.renameRequest = connection.send({ type: "rename_session", title: title || null }) || null;
+  setStatus($("rename-status"), view.renameRequest ? "Renaming…" : "Not connected. Title unchanged."); refreshSessions();
+});
+on("drawer-settings", "click", () => { setStatus($("settings-host"), `${credentials.load()?.serverName || "Jcode"} · ${location.host}`); openDialog("settings-dialog"); });
+on("sessions-unpair", "click", () => {
+  if (!confirm("Forget this server on this device? Drafts will stay on this device.")) return;
+  credentials.clear(); openPairing("Unpaired.");
+});
+for (const button of document.querySelectorAll("[data-close-dialog]")) button.addEventListener("click", () => closeDialog(button.dataset.closeDialog));
+for (const dialog of document.querySelectorAll("dialog")) {
+  dialog.addEventListener("close", () => { const prior = dialogFocus.get(dialog); if (prior?.isConnected && !prior.closest("[hidden]")) prior.focus({ preventScroll: true }); });
+  dialog.addEventListener("click", (event) => { if (event.target === dialog) { const r = dialog.getBoundingClientRect(); if (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom) dialog.close(); } });
+}
+const colorScheme = window.matchMedia("(prefers-color-scheme: dark)");
+function applyTheme() {
+  const choice = storage.get("jcode.theme.v1", "system");
+  const theme = choice === "dark" || (choice === "system" && colorScheme.matches) ? "dark" : "light";
+  document.documentElement.dataset.theme = theme;
+  document.documentElement.style.colorScheme = theme;
+  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", theme === "dark" ? "#1f1e1b" : "#faf9f6");
+  document.querySelector('meta[name="color-scheme"]')?.setAttribute("content", theme);
+  if ($("theme-select")) $("theme-select").value = choice;
+}
+on("theme-select", "change", () => { const value = $("theme-select").value; if (["system", "light", "dark"].includes(value)) storage.set("jcode.theme.v1", value); applyTheme(); });
+colorScheme.addEventListener?.("change", applyTheme);
+function updateViewport() {
+  document.documentElement.style.setProperty("--app-height", `${window.visualViewport?.height || window.innerHeight}px`);
+}
+window.visualViewport?.addEventListener("resize", updateViewport);
+window.addEventListener("resize", updateViewport);
+window.addEventListener("popstate", () => {
+  let id; try { id = decodeURIComponent(location.hash.slice(1)); } catch { id = ""; }
+  if (id) openChat(sessions.find((s) => s.id === id) || { id }, false); else newChat(false);
+});
+function foreground() {
   if (document.visibilityState !== "visible") return;
-  if (connection.stopped || !connection.token) return;
-  if (!connection.socket || connection.socket.readyState > WebSocket.OPEN) {
-    connection.attempt = 0;
-    connection.open();
-  }
-});
-
-// ------------------------------------------------------------------- start
-
-if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => {
-    navigator.serviceWorker.register("/sw.js").catch(() => {
-      /* offline shell is a bonus, never a requirement */
-    });
-  });
+  refreshSessions();
+  if (!connection.stopped && (!connection.socket || connection.socket.readyState > WebSocket.OPEN)) connection.open();
 }
-
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") {
+    // Mobile can thaw an apparently OPEN but dead TCP socket. Replace, don't duplicate it.
+    if (!connection.stopped) connection.open();
+    foreground();
+  } else { saveDraft(); clearTimeout(directoryTimer); clearTimeout(connection.timer); }
+});
+window.addEventListener("focus", foreground);
+window.addEventListener("online", foreground);
+window.addEventListener("pagehide", () => { saveDraft(); clearTimeout(directoryTimer); connection.closeSocket(); });
+window.addEventListener("pageshow", foreground);
+if ("serviceWorker" in navigator && window.isSecureContext) window.addEventListener("load", () => { navigator.serviceWorker.register("/sw.js").catch(() => {}); });
 (function boot() {
-  const creds = credentials.load();
-  if (!creds) {
-    openPairing();
-    return;
-  }
-  const hash = location.hash.slice(1);
-  if (hash) {
-    openChat({ id: hash, title: hash });
-  } else {
-    openSessions();
-  }
+  applyTheme(); updateViewport();
+  // Load before any save to avoid overwriting the durable new-chat draft at boot.
+  let id; try { id = decodeURIComponent(location.hash.slice(1)); } catch { id = ""; }
+  loadDraft(id || "new");
+  if (!credentials.load()) { openPairing(); return; }
+  if (id) openChat({ id }, false); else newChat(false);
 })();
