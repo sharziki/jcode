@@ -453,3 +453,19 @@ test("a bracketed line with other content is left as text", () => {
   );
   assert.ok(root.textContent.includes("not math"));
 });
+
+test("inline bracketed math inside a sentence renders", () => {
+  // Verbatim from the deployed transcript: models mix this with \( ... \).
+  const root = render("so [ \\mathbf r\\cdot\\mathbf v=0. ] therefore");
+  assert.ok(!root.textContent.includes("mathbf"), "command consumed");
+  assert.ok(root.textContent.includes("\u22c5"), "\\cdot rendered");
+  assert.ok(root.textContent.includes("so ") && root.textContent.includes("therefore"));
+});
+
+test("bracketed prose without a latex command is untouched", () => {
+  // The leading-command requirement is what keeps this from being math.
+  const root = render("an array [1, 2, 3] and [see notes] here");
+  assert.strictEqual(root.count("span"), 0, "no math spans");
+  assert.ok(root.textContent.includes("[1, 2, 3]"));
+  assert.ok(root.textContent.includes("[see notes]"));
+});

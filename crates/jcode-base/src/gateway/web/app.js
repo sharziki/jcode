@@ -747,7 +747,7 @@ function parseList(lines, start) {
 // transcript's `*\*\*text\*\*​*` wrapper turned into stray italics full of
 // literal backslashes.
 const INLINE_RE =
-  /(\\\((?:[\s\S]*?)\\\))|(\\[\\`*_~[\]()#+\-.!>])|(`[^`]+`)|((?<!\\)\*\*(?:[^*\\]|\\.)+?\*\*|(?<!\\)__(?:[^_\\]|\\.)+?__)|((?<!\\)\*(?:[^*\\\n]|\\.)+?\*|(?<![A-Za-z0-9_\\])_(?:[^_\\\n]|\\.)+?_(?![A-Za-z0-9_]))|((?<!\\)~~(?:[^~\\]|\\.)+?~~)|(\[[^\]\n]*\]\([^)\s]+\))|(https?:\/\/[^\s<>()]+)/g;
+  /(\\\((?:[\s\S]*?)\\\))|(\[\s*\\[A-Za-z][^\]\n]*\])|(\\[\\`*_~[\]()#+\-.!>])|(`[^`]+`)|((?<!\\)\*\*(?:[^*\\]|\\.)+?\*\*|(?<!\\)__(?:[^_\\]|\\.)+?__)|((?<!\\)\*(?:[^*\\\n]|\\.)+?\*|(?<![A-Za-z0-9_\\])_(?:[^_\\\n]|\\.)+?_(?![A-Za-z0-9_]))|((?<!\\)~~(?:[^~\\]|\\.)+?~~)|(\[[^\]\n]*\]\([^)\s]+\))|(https?:\/\/[^\s<>()]+)/g;
 
 function renderInline(target, text) {
   let last = 0;
@@ -764,30 +764,38 @@ function renderInline(target, text) {
       span.textContent = latexToText(tok.slice(2, -2));
       target.append(span);
     } else if (m[2]) {
+      // `[ \cmd ... ]` inline in a sentence. Models emit this bracketed form
+      // alongside `\( ... \)`; requiring a leading LaTeX command keeps it from
+      // ever swallowing a markdown link or ordinary bracketed prose.
+      const span = document.createElement("span");
+      span.className = "math";
+      span.textContent = latexToText(tok.slice(1, -1));
+      target.append(span);
+    } else if (m[3]) {
       // Backslash escape: emit the literal character, never the backslash.
       // Real transcripts contain `\*\*text\*\*`, which without this both
       // showed stray backslashes and mis-parsed the surrounding emphasis.
       target.append(document.createTextNode(tok[1]));
-    } else if (m[3]) {
+    } else if (m[4]) {
       const code = document.createElement("code");
       code.textContent = tok.slice(1, -1);
       target.append(code);
-    } else if (m[4]) {
+    } else if (m[5]) {
       const strong = document.createElement("strong");
       renderInline(strong, tok.slice(2, -2));
       target.append(strong);
-    } else if (m[5]) {
+    } else if (m[6]) {
       const em = document.createElement("em");
       renderInline(em, tok.slice(1, -1));
       target.append(em);
-    } else if (m[6]) {
+    } else if (m[7]) {
       const del = document.createElement("del");
       renderInline(del, tok.slice(2, -2));
       target.append(del);
-    } else if (m[7]) {
+    } else if (m[8]) {
       const parts = tok.match(/^\[([^\]]*)\]\(([^)\s]+)\)$/);
       target.append(buildLink(parts[2], parts[1] || parts[2]));
-    } else if (m[8]) {
+    } else if (m[9]) {
       target.append(buildLink(tok, tok));
     }
     last = m.index + tok.length;
