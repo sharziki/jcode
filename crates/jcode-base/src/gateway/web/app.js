@@ -724,6 +724,24 @@ function parseList(lines, start) {
       i = next;
       continue;
     }
+    // A display-math block indented under an item belongs to that item. Models
+    // write this constantly ("- **Circle:** so\n  \[\n  ...\n  \]"), and
+    // treating it as lazy continuation rendered the LaTeX as raw source.
+    if (item && /^\s*(\\\[|\[)\s*$/.test(line)) {
+      const body = [];
+      i += 1;
+      while (i < lines.length && !/^\s*(\\\]|\])\s*$/.test(lines[i])) {
+        body.push(lines[i]);
+        i += 1;
+      }
+      i += 1; // consume the closer (absent at EOF while streaming)
+      const div = document.createElement("div");
+      div.className = "math-display";
+      div.textContent = latexToText(body.join(" "));
+      item.append(div);
+      continue;
+    }
+
     // Lazy continuation of the current item.
     if (item) {
       item.append(document.createTextNode(" "));

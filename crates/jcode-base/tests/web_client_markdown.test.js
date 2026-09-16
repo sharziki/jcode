@@ -469,3 +469,20 @@ test("bracketed prose without a latex command is untouched", () => {
   assert.ok(root.textContent.includes("[1, 2, 3]"));
   assert.ok(root.textContent.includes("[see notes]"));
 });
+
+test("display math indented under a list item renders", () => {
+  // Verbatim shape from the deployed transcript. parseList consumed these
+  // lines as lazy continuation, so the block never reached the math branch and
+  // the LaTeX showed as raw source inside the bullet.
+  const root = render(
+    "- **Circle:** so\n  \\[\n  \\mathbf r\\cdot\\mathbf v=0.\n  \\]\n- **Next**",
+  );
+  assert.ok(!root.textContent.includes("mathbf"), "command consumed");
+  assert.ok(root.textContent.includes("\u22c5"), "\\cdot rendered");
+  const li = root.find("li");
+  assert.ok(
+    li.descendants().some((n) => n.classList.contains("math-display")),
+    "the math block belongs to the list item",
+  );
+  assert.ok(root.textContent.includes("Next"), "the next item still parses");
+});
