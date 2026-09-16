@@ -179,7 +179,9 @@ async function refreshSessions() {
       renderSessions();
       const active = sessions.find((s) => s.id === connection.sessionID);
       if (active) {
-        view.knownTitle = active.title || "New conversation"; el.chatTitle.textContent = view.knownTitle;
+        if (!view.renameRequest && active.title && active.title !== "New conversation") {
+          view.knownTitle = active.title; el.chatTitle.textContent = view.knownTitle;
+        }
         if (!workingDir && validDirectory(active.working_dir)) workingDir = active.working_dir;
       }
       updateComposer();
@@ -1093,6 +1095,7 @@ function handleEvent(event) {
       }
       if (event.id === view.modelRequest) { view.modelRequest = null; renderModels(); setStatus($("model-status"), message, "error"); }
       if (event.id === view.renameRequest) { view.renameRequest = null; setStatus($("rename-status"), message, "error"); }
+      if (connection.requests.get(event.id) === "message") { endStreaming(); setProcessing(false); setStatusLine(""); }
       if (connection.requests.get(event.id) === "cancel") { view.stopping = false; updateComposer(); }
       recoverSend(event.id); addMessage("error", message); connection.requests.delete(event.id); break;
     }
@@ -1103,10 +1106,22 @@ function handleEvent(event) {
     default: break; // Forward compatibility: unknown events do not break the stream.
   }
 }
+function promptTitle(content) {
+  const title = String(content || "").replace(/\s+/g, " ").trim();
+  return title.length > 80 ? `${title.slice(0, 80)}…` : title;
+}
+function usePromptTitle(content) {
+  if (!view.knownTitle || view.knownTitle === "New conversation") {
+    view.knownTitle = promptTitle(content) || "New conversation";
+    el.chatTitle.textContent = view.knownTitle;
+  }
+}
 function renderHistory(event, preservePosition = false) {
   const pinned = isPinnedToBottom(); const scrollTop = el.transcript.scrollTop;
   const pending = draftRecord().pending || [];
-  resetView(); el.chatTitle.textContent = event.display_title || view.knownTitle || "New conversation";
+  resetView();
+  usePromptTitle((event.messages || []).find((m) => m.role === "user" && m.content)?.content);
+  el.chatTitle.textContent = event.display_title || view.knownTitle || "New conversation";
   const users = [];
   for (const message of event.messages || []) {
     if (message.role !== "user" && message.role !== "assistant") continue;
@@ -1184,6 +1199,7 @@ function sendMessage() {
   const record = draftRecord();
   const pending = { id, content, userCount: el.transcript.querySelectorAll(".msg.user").length };
   record.pending = [...(record.pending || []), pending]; record.text = ""; storage.set(draftKey(), record);
+  if (pending.userCount === 0) usePromptTitle(content);
   const node = addMessage("user", content); node.dataset.pending = "true";
   view.optimistic.push({ ...pending, node, echoes: new Set() });
   if (view.optimistic.length > 100) view.optimistic.shift();

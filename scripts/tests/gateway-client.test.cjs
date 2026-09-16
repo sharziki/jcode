@@ -256,3 +256,26 @@ test('first-run model picker resumes loading after user chooses a project', asyn
   h.run("chooseProject('/home/test/new-project')"); assert.equal(h.sockets.length, 1);
   h.sockets[0].connect(); assert.equal(h.sockets[0].sent[0].working_dir, '/home/test/new-project');
 });
+
+test('message error ends its active turn but unrelated action errors do not', async () => {
+  const h = harness(); await h.attach(); h.run("el.composerInput.value='first'; sendMessage()");
+  const messageID = h.sockets.at(-1).sent.at(-1).id;
+  h.event({ type: 'text_delta', text: 'partial' });
+  h.run("selectModel('other-model')");
+  h.event({ type: 'error', id: h.run('view.modelRequest'), message: 'Model unavailable' });
+  assert.equal(h.run('view.processing'), true);
+  h.event({ type: 'error', id: messageID, message: 'Generation failed' });
+  assert.equal(h.run('view.processing'), false); assert.equal(h.run('view.streaming'), null);
+});
+
+test('first prompt titles old-server chats until authoritative directory title arrives', async () => {
+  const h = harness(); await h.attach(); h.run("el.composerInput.value='A meaningful first prompt'; sendMessage()");
+  assert.equal(h.nodes.get('chat-title').textContent, 'A meaningful first prompt'); await h.flush();
+  h.setFetch(async () => ({ ok: true, json: async () => ({ sessions: [{ id: 'session-one', title: 'New conversation' }] }) }));
+  await h.run('refreshSessions()'); assert.equal(h.nodes.get('chat-title').textContent, 'A meaningful first prompt');
+  h.setFetch(async () => ({ ok: true, json: async () => ({ sessions: [{ id: 'session-one', title: 'Server-generated title' }] }) }));
+  await h.run('refreshSessions()'); assert.equal(h.nodes.get('chat-title').textContent, 'Server-generated title');
+  h.run('view.renameRequest=999');
+  h.setFetch(async () => ({ ok: true, json: async () => ({ sessions: [{ id: 'session-one', title: 'Stale title' }] }) }));
+  await h.run('refreshSessions()'); assert.equal(h.nodes.get('chat-title').textContent, 'Server-generated title');
+});
