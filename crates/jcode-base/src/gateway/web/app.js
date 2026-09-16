@@ -159,11 +159,11 @@ async function fetchSessions(token) {
 }
 function scheduleDirectory() {
   clearTimeout(directoryTimer);
-  if (document.visibilityState === "visible" && credentials.load()) directoryTimer = setTimeout(refreshSessions, 3000);
+  if (document.visibilityState === "visible" && navigator.onLine !== false && credentials.load()) directoryTimer = setTimeout(refreshSessions, 3000);
 }
 async function refreshSessions() {
   if (directoryRequest) return directoryRequest;
-  if (document.visibilityState !== "visible") return;
+  if (document.visibilityState !== "visible" || navigator.onLine === false) return;
   const creds = credentials.load();
   if (!creds) return;
   clearTimeout(directoryTimer);
@@ -273,7 +273,7 @@ const connection = {
   },
   stop() { this.stopped = true; clearTimeout(this.timer); this.closeSocket(); this.catalogRequests.clear(); this.requests.clear(); },
   open() {
-    if (this.stopped || !this.token || document.visibilityState !== "visible") return;
+    if (this.stopped || !this.token || document.visibilityState !== "visible" || navigator.onLine === false) return;
     clearTimeout(this.timer); this.closeSocket();
     this.catalogRequests.clear(); this.requests.clear();
     view.modelRequest = null; view.renameRequest = null;
@@ -1295,6 +1295,10 @@ document.addEventListener("visibilitychange", () => {
 });
 window.addEventListener("focus", foreground);
 window.addEventListener("online", foreground);
+window.addEventListener("offline", () => {
+  saveDraft(); clearTimeout(directoryTimer); clearTimeout(connection.timer);
+  connection.closeSocket(); setPhase("disconnected", "Offline · draft saved");
+});
 window.addEventListener("pagehide", () => { saveDraft(); clearTimeout(directoryTimer); connection.closeSocket(); });
 window.addEventListener("pageshow", foreground);
 if ("serviceWorker" in navigator && window.isSecureContext) window.addEventListener("load", () => { navigator.serviceWorker.register("/sw.js").catch(() => {}); });

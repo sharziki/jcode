@@ -291,3 +291,16 @@ test('readable known-model labels retain raw server IDs for switching and detail
   await h.nodes.get('model-list').children[0].emit('click');
   assert.equal(h.sockets.at(-1).sent.at(-1).model, 'gpt-6-astra');
 });
+
+test('offline event immediately clears attachment and online resumes one socket with saved draft', async () => {
+  const h = harness(); await h.attach(); const old = h.sockets.at(-1);
+  h.run("el.composerInput.value='offline draft'; navigator.onLine=false");
+  await h.window.emit('offline');
+  assert.equal(old.closed, true); assert.equal(h.run('connection.attached'), false); assert.equal(h.run('connection.stopped'), false);
+  assert.match(h.nodes.get('chat-phase').textContent, /Offline/); assert.equal(h.run('draftRecord().text'), 'offline draft');
+  const count = h.sockets.length; const requests = h.fetches();
+  h.run('connection.open(); refreshSessions()'); assert.equal(h.sockets.length, count); assert.equal(h.fetches(), requests);
+  h.run('navigator.onLine=true'); await h.window.emit('online');
+  assert.equal(h.sockets.length, count + 1); assert.equal(h.sockets.filter((s) => !s.closed).length, 1);
+  assert.equal(h.run('el.composerInput.value'), 'offline draft');
+});
