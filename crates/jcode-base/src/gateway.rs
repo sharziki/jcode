@@ -513,26 +513,54 @@ async fn handle_sessions_request(
     }
 
     let limit = parse_limit_param(path);
-    let live: std::collections::HashSet<String> =
-        jcode_storage::active_session_ids().into_iter().collect();
-
-    let sessions: Vec<serde_json::Value> = crate::recent_session_index::recent(limit)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|entry| {
-            serde_json::json!({
-                "id": entry.session_id,
-                "title": entry.display_title(),
-                "working_dir": entry.working_dir,
-                "updated_at_ms": entry.last_active_at_ms.unwrap_or(entry.updated_at_ms),
-                "saved": entry.saved,
-                "live": live.contains(&entry.session_id),
-            })
+    // SQLite migration/backfill and presence filesystem IO must not block the
+    // Tokio listener. A broken index is an error, never an empty history.
+    let sessions =
+        match tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<serde_json::Value>> {
+            let entries = crate::recent_session_index::recent_with_backfill(limit)?;
+            let live: std::collections::HashSet<String> = jcode_storage::session_presence()
+                .into_iter()
+                .map(|presence| presence.session_id)
+                .collect();
+            Ok(entries
+                .into_iter()
+                .map(|entry| session_list_value(&entry, live.contains(&entry.session_id)))
+                .collect())
         })
-        .collect();
+        .await
+        {
+            Ok(Ok(sessions)) => sessions,
+            result => {
+                crate::logging::error(&format!("Gateway session metadata unavailable: {result:?}"));
+                return http_response(
+                    500,
+                    "Internal Server Error",
+                    &serde_json::json!({"error": "Session metadata unavailable; retry shortly"})
+                        .to_string(),
+                );
+            }
+        };
 
     let body = serde_json::json!({ "sessions": sessions });
     http_response(200, "OK", &body.to_string())
+}
+
+fn session_list_value(
+    entry: &crate::recent_session_index::RecentSessionMetadata,
+    live: bool,
+) -> serde_json::Value {
+    serde_json::json!({
+        "id": entry.session_id,
+        "title": entry.display_title().unwrap_or("New conversation"),
+        "preview": entry.preview,
+        "model": entry.model,
+        "message_count": entry.message_count,
+        "friendly_name": entry.friendly_name,
+        "working_dir": entry.working_dir,
+        "updated_at_ms": entry.last_active_at_ms.unwrap_or(entry.updated_at_ms),
+        "saved": entry.saved,
+        "live": live,
+    })
 }
 
 /// Clamp of the `?limit=` query parameter for `/sessions`.

@@ -268,3 +268,99 @@ fn test_web_assets_resolve_only_for_known_paths() {
         );
     }
 }
+
+#[test]
+fn test_sessions_metadata_contract_preserves_null_unknowns_and_title_fallback() {
+    let entry = crate::recent_session_index::RecentSessionMetadata {
+        session_id: "session_crab".into(),
+        friendly_name: Some("crab".into()),
+        updated_at_ms: 42,
+        saved: true,
+        ..Default::default()
+    };
+    let value = session_list_value(&entry, false);
+    assert_eq!(value["title"], "New conversation");
+    assert_eq!(value["friendly_name"], "crab");
+    assert!(value["preview"].is_null());
+    assert!(value["model"].is_null());
+    assert!(value["message_count"].is_null());
+    assert_eq!(value["updated_at_ms"], 42);
+    assert_eq!(value["saved"], true);
+    assert_eq!(value["live"], false);
+    let value = session_list_value(
+        &crate::recent_session_index::RecentSessionMetadata {
+            first_prompt: Some("Actual prompt".into()),
+            preview: Some("Real reply".into()),
+            model: Some("actual-model".into()),
+            message_count: Some(2),
+            last_active_at_ms: Some(100),
+            ..entry
+        },
+        true,
+    );
+    assert_eq!(value["title"], "Actual prompt");
+    assert_eq!(value["preview"], "Real reply");
+    assert_eq!(value["model"], "actual-model");
+    assert_eq!(value["message_count"], 2);
+    assert_eq!(value["updated_at_ms"], 100);
+    assert_eq!(value["live"], true);
+}
+
+#[tokio::test]
+async fn test_sessions_index_failure_is_not_empty_success() {
+    let home = isolated_home();
+    let mut registry = DeviceRegistry::default();
+    let token = registry.pair_device("test-device".into(), "test".into(), None);
+    std::fs::create_dir(home._dir.path().join("session-metadata-v1.sqlite3")).unwrap();
+    let headers = format!("Authorization: Bearer {token}");
+    let response = handle_sessions_request(
+        &headers,
+        "/sessions",
+        &Arc::new(tokio::sync::RwLock::new(registry)),
+    )
+    .await;
+    let response = String::from_utf8(response).unwrap();
+    assert!(response.starts_with("HTTP/1.1 500"), "{response}");
+    assert!(response.contains("Session metadata unavailable"));
+    assert!(!response.contains("\"sessions\":[]"));
+}
+
+#[tokio::test]
+async fn test_sessions_endpoint_uses_real_pid_liveness_and_indexed_metadata() {
+    let _home = isolated_home();
+    let mut registry = DeviceRegistry::default();
+    let token = registry.pair_device("metadata-test".into(), "test".into(), None);
+    for (id, pid) in [("session_live", std::process::id()), ("session_stale", 0)] {
+        crate::recent_session_index::upsert(&crate::recent_session_index::RecentSessionMetadata {
+            session_id: id.into(),
+            first_prompt: Some("Real first prompt".into()),
+            preview: Some("Last conversational reply".into()),
+            model: Some("real-model".into()),
+            message_count: Some(2),
+            saved: true,
+            updated_at_ms: 5,
+            ..Default::default()
+        })
+        .unwrap();
+        jcode_storage::register_active_pid(id, pid);
+    }
+    let response = handle_sessions_request(
+        &format!("Authorization: Bearer {token}"),
+        "/sessions",
+        &Arc::new(tokio::sync::RwLock::new(registry)),
+    )
+    .await;
+    let response = String::from_utf8(response).unwrap();
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    let body: serde_json::Value =
+        serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap();
+    let entries = body["sessions"].as_array().unwrap();
+    assert_eq!(entries.len(), 2);
+    for entry in entries {
+        assert_eq!(entry["title"], "Real first prompt");
+        assert_eq!(entry["preview"], "Last conversational reply");
+        assert_eq!(entry["message_count"], 2);
+        assert_eq!(entry["saved"], true);
+        assert_eq!(entry["live"], entry["id"] == "session_live");
+    }
+}
