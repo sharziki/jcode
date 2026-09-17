@@ -21,12 +21,20 @@
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
+use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::time::Duration;
 
 /// Port and bearer token of the one shared gateway, or `None` when this
 /// environment cannot host a loopback listener.
 static GATEWAY: OnceLock<Option<(u16, String)>> = OnceLock::new();
+
+/// Clients handed to the host process by the gateway, newest last.
+///
+/// The gateway's whole contract is that a remote client is bridged into *this*
+/// process rather than executed anywhere else, so capturing the handoff is the
+/// observable that proves it.
+static HANDOFFS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 /// Session IDs placed in the fixture swarm snapshot.
 const COORDINATOR: &str = "e2e-coordinator";
@@ -145,11 +153,26 @@ fn gateway() -> Option<(u16, String)> {
             seed_session_index();
 
             let port = free_port();
-            let (client_tx, client_rx) = tokio::sync::mpsc::unbounded_channel();
-            // Hold the receiver open; dropping it closes the channel the
-            // gateway writes to. Nothing here opens a WebSocket, so nothing is
-            // ever sent down it.
-            std::mem::forget(client_rx);
+            let (client_tx, mut client_rx) =
+                tokio::sync::mpsc::unbounded_channel::<jcode_base::gateway::GatewayClient>();
+            // Stand in for the server's accept loop. The real `Server::run`
+            // takes each `GatewayClient` and runs `handle_client` on it in this
+            // same process; recording the handoff here is what makes that
+            // observable, and it keeps the channel open besides.
+            std::thread::spawn(move || {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("build handoff runtime");
+                runtime.block_on(async move {
+                    while let Some(client) = client_rx.recv().await {
+                        HANDOFFS
+                            .lock()
+                            .expect("handoff lock")
+                            .push(client.device_name.clone());
+                    }
+                });
+            });
 
             std::thread::spawn(move || {
                 let runtime = tokio::runtime::Builder::new_current_thread()
@@ -366,6 +389,68 @@ fn the_session_list_still_requires_a_token() {
             status_line(&bogus).contains("401"),
             "an unknown token is rejected: {}",
             status_line(&bogus)
+        );
+    });
+}
+
+/// Where does a phone's work actually run?
+///
+/// This was previously answered by reading the source, which is an argument,
+/// not an observation. The gateway's contract is that it is a door, not a
+/// second computer: a remote client is bridged into the *host* process, so
+/// tools execute on the machine running `jcode`, with its filesystem and its
+/// credentials. If that were wrong, "the compute is on your laptop" would be a
+/// false statement about where a user's code and secrets are touched.
+///
+/// Observed rather than argued: complete a real WebSocket upgrade against the
+/// running gateway and watch for the `GatewayClient` handoff to arrive in this
+/// process. The handoff carries the socket that the host's `handle_client`
+/// serves, which is the mechanism by which remote sessions run locally.
+#[test]
+fn a_remote_client_is_bridged_into_the_host_process() {
+    with_gateway(|port, token| {
+        let before = HANDOFFS.lock().expect("handoff lock").len();
+
+        // Minimal RFC 6455 handshake, the same one the browser performs.
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .expect("timeout");
+        let handshake = format!(
+            "GET /ws?token={token} HTTP/1.1\r\n\
+             Host: 127.0.0.1\r\n\
+             Upgrade: websocket\r\n\
+             Connection: Upgrade\r\n\
+             Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+             Sec-WebSocket-Version: 13\r\n\r\n"
+        );
+        stream.write_all(handshake.as_bytes()).expect("handshake");
+        stream.flush().expect("flush");
+
+        let mut head = [0u8; 256];
+        let read = stream.read(&mut head).expect("read handshake response");
+        let response = String::from_utf8_lossy(&head[..read]).into_owned();
+        assert!(
+            response.contains("101"),
+            "the gateway completes the WebSocket upgrade: {}",
+            response.lines().next().unwrap_or("")
+        );
+
+        // The handoff crosses a channel and a thread, so poll briefly.
+        let mut handed_off = false;
+        for _ in 0..100 {
+            if HANDOFFS.lock().expect("handoff lock").len() > before {
+                handed_off = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+
+        assert!(
+            handed_off,
+            "a remote client must be handed to THIS process to be served; \
+             without that handoff the gateway would not be a door onto the \
+             local machine and 'the compute runs on your computer' would be false"
         );
     });
 }
