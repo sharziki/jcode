@@ -1320,9 +1320,21 @@ function applyTheme() {
 on("theme-select", "change", () => { const value = $("theme-select").value; if (["system", "light", "dark"].includes(value)) storage.set("jcode.theme.v1", value); applyTheme(); });
 colorScheme.addEventListener?.("change", applyTheme);
 function updateViewport() {
-  document.documentElement.style.setProperty("--app-height", `${window.visualViewport?.height || window.innerHeight}px`);
+  const viewport = window.visualViewport;
+  const height = viewport?.height || window.innerHeight;
+  document.documentElement.style.setProperty("--app-height", `${height}px`);
+  // iOS does not just shrink the visual viewport for the keyboard, it also
+  // scrolls the layout viewport underneath it. Without compensating for
+  // offsetTop the whole app slides up out of view while typing, which is the
+  // "viewport breaks when I type" report. Translating by offsetTop pins the
+  // app to the visible region instead.
+  const offset = Math.max(0, Math.round(viewport?.offsetTop || 0));
+  document.documentElement.style.setProperty("--viewport-offset", `${offset}px`);
 }
 window.visualViewport?.addEventListener("resize", updateViewport);
+// offsetTop changes on scroll without a resize, e.g. when focus moves between
+// fields while the keyboard is already up.
+window.visualViewport?.addEventListener("scroll", updateViewport);
 window.addEventListener("resize", updateViewport);
 window.addEventListener("popstate", () => {
   let id; try { id = decodeURIComponent(location.hash.slice(1)); } catch { id = ""; }
