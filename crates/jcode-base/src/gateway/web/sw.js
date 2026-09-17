@@ -10,7 +10,7 @@
 
 // Bump on every shell change. The old cache is deleted on activate, so a stale
 // version would otherwise keep serving the previous app.js and hide the fix.
-const VERSION = "jcode-shell-v5-pairlink";
+const VERSION = "jcode-shell-v6-conn";
 const PRECACHE = [
   "/",
   "/index.html",

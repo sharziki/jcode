@@ -280,18 +280,33 @@ const connection = {
   // Terminal turn events fan out across clients; use a browser-random request namespace.
   socket: null, token: null, sessionID: null, nextRequestID: Math.floor(Math.random() * 2 ** 48) + 1, attempt: 0, timer: null,
   stopped: true, attached: false, fatalReason: null, attachRequestID: null,
-  historyRequestID: null, syncRequestID: null, syncError: null, catalogRequests: new Set(), requests: new Map(),
+  historyRequestID: null, syncRequestID: null, syncError: null, liveProbe: null, catalogRequests: new Set(), requests: new Map(),
   start(token, sessionID) {
     this.stop(); this.stopped = false; this.token = token; this.sessionID = sessionID || null;
     this.attempt = 0; this.fatalReason = null; this.open();
   },
   closeSocket() {
     const socket = this.socket; this.socket = null; this.attached = false; this.syncRequestID = null; this.syncError = null;
+    if (this.liveProbe) { clearTimeout(this.liveProbe); this.liveProbe = null; }
     if (socket) { socket.onopen = socket.onmessage = socket.onclose = socket.onerror = null; try { socket.close(); } catch { /* already closed */ } }
   },
   stop() { this.stopped = true; clearTimeout(this.timer); this.closeSocket(); this.catalogRequests.clear(); this.requests.clear(); },
   open() {
     if (this.stopped || !this.token || document.visibilityState !== "visible" || navigator.onLine === false) return;
+    // A socket that is already OPEN and attached needs no replacement. Without
+    // this, returning to the tab tore down a perfectly healthy connection and
+    // rebuilt it, which re-ran `subscribe` + `get_history` and re-rendered the
+    // whole transcript — the flicker and "chat reloads when I switch tabs"
+    // behaviour. Worse, `visibilitychange` called open() and then foreground(),
+    // which called open() again, so it happened twice per switch.
+    //
+    // CONNECTING is deliberately excluded: a socket stuck mid-handshake is
+    // exactly what a thawed mobile connection looks like, and that one does
+    // need replacing.
+    if (this.socket && this.socket.readyState === WebSocket.OPEN && this.attached) {
+      clearTimeout(this.timer);
+      return;
+    }
     clearTimeout(this.timer); this.closeSocket();
     this.catalogRequests.clear(); this.requests.clear();
     view.modelRequest = null; view.renameRequest = null;
@@ -313,6 +328,7 @@ const connection = {
     };
     socket.onmessage = (message) => {
       if (this.socket !== socket) return;
+      this.noteInbound();
       for (const line of String(message.data).split("\n")) {
         if (!line.trim()) continue;
         let event; try { event = JSON.parse(line); } catch { continue; }
@@ -339,6 +355,34 @@ const connection = {
     if (this.stopped) return;
     this.closeSocket(); clearTimeout(this.timer); setPhase("reconnecting");
     this.timer = setTimeout(() => this.open(), 500);
+  },
+  // Prove a socket is alive rather than assuming it from readyState.
+  //
+  // iOS can return from background with a socket still reporting OPEN whose TCP
+  // connection is actually dead, so nothing arrives and nothing errors. The old
+  // code handled that by replacing the socket on every foreground, which also
+  // destroyed healthy ones and caused the transcript to reload on tab switch.
+  //
+  // Instead, send a cheap request and give the server a moment to answer. Any
+  // inbound frame clears the probe (see `noteInbound`), so a busy connection
+  // passes immediately without waiting for this exact reply.
+  verifyLive() {
+    if (this.stopped || this.liveProbe) return;
+    const socket = this.socket;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    let sent;
+    try { sent = this.send({ type: "get_model_catalog" }); } catch { sent = null; }
+    if (!sent) { this.reconnectSoon(); return; }
+    this.catalogRequests.add(sent);
+    this.liveProbe = setTimeout(() => {
+      this.liveProbe = null;
+      // Still the same socket and still silent: it is wedged, replace it.
+      if (this.socket === socket && socket.readyState === WebSocket.OPEN) this.reconnectSoon();
+    }, 4000);
+  },
+  // Any frame from the server is proof of life.
+  noteInbound() {
+    if (this.liveProbe) { clearTimeout(this.liveProbe); this.liveProbe = null; }
   },
   send(request) {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return false;
@@ -1589,12 +1633,21 @@ window.addEventListener("popstate", () => {
 function foreground() {
   if (document.visibilityState !== "visible") return;
   refreshSessions();
-  if (!connection.stopped && (!connection.socket || connection.socket.readyState > WebSocket.OPEN)) connection.open();
+  if (connection.stopped) return;
+  const socket = connection.socket;
+  // Missing or already closing/closed: reconnect.
+  if (!socket || socket.readyState > WebSocket.OPEN) { connection.open(); return; }
+  // A phone that has been asleep can hand back a socket that still reports
+  // OPEN while its TCP connection is dead. `open()` deliberately will not
+  // replace a healthy socket, so prove liveness instead of guessing: ping, and
+  // reconnect only if the server does not answer.
+  if (socket.readyState === WebSocket.OPEN) connection.verifyLive();
 }
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") {
-    // Mobile can thaw an apparently OPEN but dead TCP socket. Replace, don't duplicate it.
-    if (!connection.stopped) connection.open();
+    // foreground() already reconnects when the socket is missing or dead, and
+    // open() is now a no-op on a healthy one. Calling open() here as well just
+    // duplicated the work on every tab switch.
     foreground();
   } else { saveDraft(); clearTimeout(directoryTimer); clearTimeout(connection.timer); }
 });
