@@ -1069,10 +1069,31 @@ function recoverSend(id) {
   const optimistic = view.optimistic.find((p) => p.id === id);
   if (optimistic) { optimistic.node.dataset.pending = "failed"; optimistic.node.setAttribute("aria-label", "Message not sent"); }
 }
+// Session id of a chat open that is still in flight. A second tap on a phone
+// arrives well before the socket attaches, and without this it started a second
+// connection to the same chat and re-rendered the transcript underneath the
+// first.
+//
+// It is a latch over a moment, so every path that changes what is on screen
+// must release it. Leaving that to the timer alone was a real bug: opening a
+// chat, pressing New chat, then tapping that same chat again inside the window
+// hit a stale latch, which returned early and left the user on an empty "New
+// conversation" with no reconnect.
+//
+// Declared here, above `acceptSession`, because `let` has no hoisting: reading
+// it from an earlier line would throw a ReferenceError in the temporal dead
+// zone the first time a session attached.
+let switching = "";
+function endSwitch() { switching = ""; }
 function acceptSession(id) {
   if (!id) return;
   if (!connection.sessionID) migrateDraft(id);
   connection.sessionID = id;
+  // The switch this latch guarded is now complete: the session is attached, so
+  // the `connection.sessionID` check below is the accurate guard from here on.
+  // Releasing it here rather than waiting out the timer keeps a fast, decisive
+  // user from being told "you are already there" when they are not.
+  if (switching === id) endSwitch();
   history.replaceState({ session: id }, "", `#${encodeURIComponent(id)}`);
   updateComposer();
 }
@@ -1209,10 +1230,6 @@ function renderHistory(event, preservePosition = false) {
 }
 
 // Navigation starts with a local welcome, and creates a real session only when needed.
-// Set while a switch is in flight. A second tap on a phone arrives well before
-// the socket attaches, and without this it started a second connection to the
-// same chat and re-rendered the transcript underneath the first.
-let switching = "";
 function openChat(session, push = true) {
   if (!credentials.load()) return openPairing();
   if (switching && switching === session.id) { closeDialogs(); show(el.chatView); return; }
@@ -1226,10 +1243,11 @@ function openChat(session, push = true) {
     return;
   }
   switching = session.id || "";
-  // Cleared on a timer, not on attach: a chat that fails to connect must not
-  // become permanently unopenable. One second is far longer than a double tap
-  // and far shorter than a user's next deliberate switch.
-  setTimeout(() => { if (switching === (session.id || "")) switching = ""; }, 1000);
+  // Backstop only. The latch is normally released by whichever navigation or
+  // attach happens next; this timer exists so a chat that never connects at all
+  // cannot become permanently unopenable. One second is far longer than a
+  // double tap and far shorter than a user's next deliberate switch.
+  setTimeout(() => { if (switching === (session.id || "")) endSwitch(); }, 1000);
   saveDraft(); closeDialogs(); show(el.chatView); resetView();
   view.knownTitle = session.title || "New conversation"; view.model = session.model || ""; view.models = [];
   view.queuedSend = false; view.modelRequest = null; view.renameRequest = null;
@@ -1245,6 +1263,9 @@ function openChat(session, push = true) {
 }
 async function newChat(push = true) {
   if (!credentials.load()) return openPairing();
+  // Starting a new chat abandons any in-flight open, so the latch no longer
+  // describes anything real and must not block reopening that chat.
+  endSwitch();
   saveDraft(); connection.stop(); connection.sessionID = null; connection.fatalReason = null;
   closeDialogs(); show(el.chatView); resetView();
   view.knownTitle = ""; view.model = ""; view.models = []; view.queuedSend = false; view.modelRequest = null; view.renameRequest = null;

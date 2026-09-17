@@ -54,6 +54,16 @@ impl Member {
                 .is_some_and(|parent| !parent.is_empty() && parent != self.session_id),
         }
     }
+
+    /// Whether this record explicitly claims a non-agent role, such as
+    /// "coordinator". Used to keep a session visible when another snapshot
+    /// still records it as a worker.
+    fn declares_non_agent_role(&self) -> bool {
+        self.role
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|role| !role.is_empty() && role != "agent")
+    }
 }
 
 /// Directory holding durable swarm snapshots, honouring the same env overrides
@@ -80,6 +90,14 @@ pub(super) fn subagent_session_ids() -> HashSet<String> {
 /// Like [`subagent_session_ids`], for an explicit snapshot directory.
 pub(super) fn subagent_ids_in(dir: impl AsRef<Path>) -> HashSet<String> {
     let mut hidden = HashSet::new();
+    // Sessions seen with an explicit non-agent role somewhere. A session can
+    // appear in several snapshots, and a worker that is later driven directly
+    // shows up as an agent in the old file and a coordinator in the new one.
+    // Hiding wins ties only when nothing claims it is a person's own chat:
+    // showing a stray worker is a small annoyance, losing a real conversation
+    // from the list is not. Snapshots carry no reliable per-member timestamp,
+    // so "any coordinator record" is the honest rule rather than "the newest".
+    let mut claimed_by_human = HashSet::new();
     let Ok(entries) = std::fs::read_dir(dir) else {
         return hidden;
     };
@@ -93,11 +111,15 @@ pub(super) fn subagent_ids_in(dir: impl AsRef<Path>) -> HashSet<String> {
         });
         let Some(snapshot) = snapshot else { continue };
         for member in snapshot.members {
+            if member.declares_non_agent_role() {
+                claimed_by_human.insert(member.session_id.clone());
+            }
             if member.is_subagent() {
                 hidden.insert(member.session_id);
             }
         }
     }
+    hidden.retain(|id| !claimed_by_human.contains(id));
     hidden
 }
 
@@ -242,5 +264,54 @@ mod tests {
 
         let hidden = subagent_ids_in(&dir);
         assert!(hidden.contains("w1") && hidden.contains("w2"));
+    }
+
+    /// A session can appear in more than one snapshot: a worker that is later
+    /// driven directly is an agent in the old file and a coordinator in the
+    /// new one. Snapshots carry no reliable per-member timestamp, so the tie
+    /// is broken toward visibility. Showing a stray worker is a small
+    /// annoyance; dropping one of the user's real conversations is not.
+    #[test]
+    fn a_coordinator_record_anywhere_keeps_the_session_visible() {
+        let dir = tempdir();
+        write(
+            &dir,
+            "older.json",
+            r#"{"members":[{"session_id":"promoted","role":"agent","report_back_to_session_id":"boss"}]}"#,
+        );
+        write(
+            &dir,
+            "newer.json",
+            r#"{"members":[{"session_id":"promoted","role":"coordinator"}]}"#,
+        );
+
+        assert!(
+            !subagent_ids_in(&dir).contains("promoted"),
+            "a stale agent record must not permanently hide a session that is \
+             now a coordinator"
+        );
+    }
+
+    /// The override must not leak: an unrelated worker stays hidden even when
+    /// some other session is promoted in the same directory.
+    #[test]
+    fn the_visibility_override_is_per_session() {
+        let dir = tempdir();
+        write(
+            &dir,
+            "mixed.json",
+            r#"{"members":[
+                {"session_id":"promoted","role":"coordinator"},
+                {"session_id":"promoted","role":"agent","report_back_to_session_id":"boss"},
+                {"session_id":"still-a-worker","role":"agent","report_back_to_session_id":"boss"}
+            ]}"#,
+        );
+
+        let hidden = subagent_ids_in(&dir);
+        assert!(!hidden.contains("promoted"));
+        assert!(
+            hidden.contains("still-a-worker"),
+            "one promoted session must not un-hide every other worker"
+        );
     }
 }
