@@ -19,7 +19,10 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 
-const VALID = "6c012ac8c5e92de45dc864e7e38d14c4dd70f7c24dfb0c8359cf589c443bc0d9";
+// A syntactically valid but fabricated token. Never paste a real one here:
+// this file is committed to a public repository, and a pairing token grants
+// full access to a gateway and does not expire.
+const VALID = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
 /** Run the real consumeTokenFromURL() against a fake browser. */
 function run({ hash, host = "server:7643", existing = {} }) {
