@@ -203,7 +203,11 @@ mod tests {
 
         let dir = tempdir();
         write(&dir, "broken.json", "{not json");
-        write(&dir, "notes.txt", r#"{"members":[{"session_id":"x","role":"agent"}]}"#);
+        write(
+            &dir,
+            "notes.txt",
+            r#"{"members":[{"session_id":"x","role":"agent"}]}"#,
+        );
         assert!(
             subagent_ids_in(&dir).is_empty(),
             "unparseable or non-JSON files must never hide a conversation"

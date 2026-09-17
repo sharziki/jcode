@@ -123,8 +123,21 @@ function loadRenderer() {
     "utf8",
   );
   const start = source.indexOf("function renderMarkdown(target, text)");
-  const end = source.indexOf("/** True when the user is near the bottom");
-  assert.ok(start > 0 && end > start, "renderer block not found in app.js");
+  // Keyed on an explicit marker in app.js, not on a passing doc comment. The
+  // previous anchor was an ordinary comment that an unrelated edit deleted,
+  // which made this slice empty and silently disabled every test below while
+  // CI stayed green-looking until the file failed to load at all.
+  const end = source.indexOf("// --- end renderer ---");
+  assert.ok(
+    start > 0,
+    "renderMarkdown not found in app.js; update this test's start anchor",
+  );
+  assert.ok(
+    end > start,
+    "the '// --- end renderer ---' marker is missing from app.js or sits " +
+      "before renderMarkdown; it must stay directly after the last renderer " +
+      "function so this test keeps exercising the real code",
+  );
 
   const context = { document: makeDocument() };
   vm.createContext(context);

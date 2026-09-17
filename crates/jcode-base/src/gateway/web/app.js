@@ -903,6 +903,14 @@ function buildLink(href, label) {
   return a;
 }
 
+// --- end renderer ---
+// tests/web_client_markdown.test.js slices the renderer out of this file by
+// text position, between `function renderMarkdown` and this marker, because the
+// file is a browser script that cannot be required. Keep this marker directly
+// after the last renderer function. The comment it previously keyed on was
+// deleted in an unrelated edit, which silently broke that CI job: the slice
+// came back empty and every renderer test stopped running.
+
 // Transcript mutations capture the scroll position BEFORE growing the content.
 function isPinnedToBottom() { const n = el.transcript; return n.scrollHeight - n.scrollTop - n.clientHeight < 80; }
 function updateJump() { if ($("jump-latest")) $("jump-latest").hidden = isPinnedToBottom(); }
@@ -1374,6 +1382,13 @@ function updateViewport() {
   }
   document.documentElement.style.setProperty("--app-height", `${height - offset}px`);
   document.documentElement.style.setProperty("--viewport-offset", `${offset}px`);
+  // Distance from the layout viewport's bottom edge up to the visible bottom.
+  // `showModal()` dialogs render in the top layer, where the containing block
+  // is the viewport itself rather than the translated body, so they cannot
+  // inherit the offset and must be positioned in viewport coordinates. Exposing
+  // the gap here keeps that arithmetic out of CSS, where `100dvh` would be a
+  // guess at the layout height rather than the measured value.
+  document.documentElement.style.setProperty("--viewport-gap", `${Math.max(0, layout - height)}px`);
 }
 let viewportFrame = 0;
 function scheduleViewport() {

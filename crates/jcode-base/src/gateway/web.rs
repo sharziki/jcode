@@ -123,7 +123,11 @@ pub(super) fn if_none_match(headers_text: &str) -> Option<&str> {
 /// Revalidation still costs a round trip, but with an `ETag` the round trip
 /// returns an empty `304` instead of re-sending the whole client on every
 /// launch. Correctness is unchanged: the server still decides what is fresh.
-pub(super) fn asset_response(content_type: &str, body: &[u8], if_none_match: Option<&str>) -> Vec<u8> {
+pub(super) fn asset_response(
+    content_type: &str,
+    body: &[u8],
+    if_none_match: Option<&str>,
+) -> Vec<u8> {
     let tag = etag(body);
 
     if if_none_match.is_some_and(|header| matches_etag(header, &tag)) {

@@ -212,11 +212,13 @@ dialog { color: var(--text); background: var(--bg); border: 0; padding: 0; max-w
 dialog::backdrop { background: #15141035; backdrop-filter: blur(2px); }
 /* Track --app-height, not 100dvh: dvh ignores the software keyboard, so with
    the keyboard up the drawer ran ~336px past the visible area and its New chat
-   pill sat off screen. Offset deliberately NOT reapplied here: these dialogs
-   resolve their containing block against the already-translated body, so
-   adding --viewport-offset again pushed the drawer down by twice the shift
-   (measured: top 80px for a 40px shift) and ran its footer off screen. */
-.drawer { inset: 0 auto auto 0; margin: 0; width: min(86vw, 368px); height: var(--app-height, 100dvh); max-height: var(--app-height, 100dvh); background: var(--drawer); border-radius: 0 24px 24px 0; box-shadow: 8px 0 50px #0001; overflow: hidden; }
+   pill sat off screen. Positioned in VIEWPORT coordinates, not the body's:
+   `showModal()` promotes a dialog to the top layer, where the containing block
+   is the viewport itself, so it inherits none of the body's translation. It
+   therefore needs the offset from the top and the keyboard gap from the bottom.
+   (An earlier attempt was checked with `.show()`, which is not top-layer, and
+   so measured a containing block the real app never uses.) */
+.drawer { inset: var(--viewport-offset, 0px) auto var(--viewport-gap, 0px) 0; margin: 0; width: min(86vw, 368px); height: auto; background: var(--drawer); border-radius: 0 24px 24px 0; box-shadow: 8px 0 50px #0001; overflow: hidden; }
 .drawer[open] { animation: drawer-in 180ms ease-out; }
 @keyframes drawer-in { from { transform: translateX(-20px); opacity: .5; } }
 .drawer-inner { display: flex; flex-direction: column; height: 100%; min-height: 0; padding: calc(var(--safe-top) + 18px) 14px calc(var(--safe-bottom) + 18px); }
@@ -251,10 +253,10 @@ dialog::backdrop { background: #15141035; backdrop-filter: blur(2px); }
 
 /* Model, project and settings sheets share one geometry. Bottom-anchored to the
    visible region: dvh ignores the keyboard, and each of these sheets contains a
-   search or text field, so the keyboard is up exactly when they are open. The
-   body is already translated by --viewport-offset, so `bottom: 0` is the
-   visible bottom here; re-adding the offset would double-count it. */
-.sheet { width: min(100%, 500px); max-height: calc(var(--app-height, 100dvh) * .85); margin: auto auto 0; padding: 8px 22px calc(var(--safe-bottom) + 24px); border-radius: 26px 26px 0 0; overflow-y: auto; overscroll-behavior: contain; position: fixed; left: 0; right: 0; bottom: 0; }
+   search or text field, so the keyboard is up exactly when they are open. Like
+   the drawer these are top-layer `showModal()` dialogs, so the offset is in
+   viewport coordinates and the bottom must clear the keyboard explicitly. */
+.sheet { width: min(100%, 500px); max-height: calc((var(--app-height, 100dvh)) * .85); margin: 0 auto; padding: 8px 22px calc(var(--safe-bottom) + 24px); border-radius: 26px 26px 0 0; overflow-y: auto; overscroll-behavior: contain; position: fixed; left: 0; right: 0; top: auto; bottom: var(--viewport-gap, 0px); }
 .sheet[open] { animation: sheet-in 160ms ease-out; }
 @keyframes sheet-in { from { opacity: .6; transform: translateY(16px); } }
 .sheet-handle { height: 4px; width: 32px; border-radius: 10px; background: var(--border-strong); margin: 1px auto 9px; }
