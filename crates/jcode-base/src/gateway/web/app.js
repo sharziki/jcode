@@ -1610,11 +1610,33 @@ window.addEventListener("pageshow", foreground);
 // first install until after every subresource had settled, so the very first
 // launch never got a warm cache and the second launch paid for it.
 if ("serviceWorker" in navigator && window.isSecureContext) navigator.serviceWorker.register("/sw.js").catch(() => {});
+// A pairing code lives 5 minutes, which is useless for "set this up for me
+// while I sleep". A pre-authorized link carries the token itself, so the first
+// tap pairs and lands straight in a chat. The token rides in the URL FRAGMENT,
+// never the query string: fragments are not sent to the server, do not appear
+// in access logs, and are not forwarded in a Referer header.
+//
+// The credential store is keyed by `location.host`, so pairing a new host is
+// additive. An existing pairing for a different gateway is untouched.
+function consumeTokenFromURL() {
+  const hash = location.hash || "";
+  const match = hash.match(/(?:^#|&)token=([^&]+)/);
+  if (!match) return false;
+  let token; try { token = decodeURIComponent(match[1]); } catch { return false; }
+  if (!/^[0-9a-f]{16,}$/i.test(token)) return false;
+  credentials.save({ token, serverName: location.host, serverVersion: null });
+  // Strip the token from the URL and from history, so a screenshot or a shared
+  // link does not leak it and a reload does not re-run this path.
+  history.replaceState({}, "", location.pathname + location.search);
+  return true;
+}
+
 (function boot() {
   applyTheme(); updateViewport();
+  const paired = consumeTokenFromURL();
   // Load before any save to avoid overwriting the durable new-chat draft at boot.
   let id; try { id = decodeURIComponent(location.hash.slice(1)); } catch { id = ""; }
   loadDraft(id || "new");
   if (!credentials.load()) { openPairing(); return; }
-  if (id) openChat({ id }, false); else newChat(false);
+  if (id && !paired) openChat({ id }, false); else newChat(false);
 })();
