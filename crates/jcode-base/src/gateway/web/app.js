@@ -1375,6 +1375,27 @@ function applyTheme() {
 }
 on("theme-select", "change", () => { const value = $("theme-select").value; if (["system", "light", "dark"].includes(value)) storage.set("jcode.theme.v1", value); applyTheme(); });
 colorScheme.addEventListener?.("change", applyTheme);
+// The keyboard is the only thing that should shorten the app. Everything else
+// that eats visual-viewport height (Safari's collapsed toolbar, the home
+// indicator inset, pinch-zoom rounding) is *persistent* chrome: the layout
+// viewport already excludes it, so subtracting it again leaves a dead band
+// below the UI. That band was visible as a ~150px gap under the drawer with no
+// keyboard on screen.
+//
+// A keyboard is distinguished by two things, not one:
+//   * it covers a lot, far more than any toolbar, and
+//   * it appears only while a text field is focused.
+// Requiring both is what separates it from chrome. A bare `covered > 100`
+// threshold cannot: on a 932px-tall iPhone, 150px of toolbar clears it easily.
+const KEYBOARD_MIN_COVERAGE = 140;
+
+function isTextEntryFocused() {
+  const node = document.activeElement;
+  if (!node) return false;
+  const tag = node.tagName;
+  return tag === "TEXTAREA" || tag === "INPUT" || node.isContentEditable === true;
+}
+
 function updateViewport() {
   const viewport = window.visualViewport;
   // iOS scrolls the layout viewport to reveal a focused field, carrying this
@@ -1397,9 +1418,7 @@ function updateViewport() {
   let height = layout;
   if (viewport) {
     const covered = layout - Math.round(viewport.height) - offset;
-    // Ignore sub-100px deltas: those are URL-bar chrome and zoom rounding, not
-    // a keyboard, and reacting to them made the layout jitter while scrolling.
-    if (covered > 100) height = layout - covered;
+    if (covered >= KEYBOARD_MIN_COVERAGE && isTextEntryFocused()) height = layout - covered;
   }
   document.documentElement.style.setProperty("--app-height", `${height - offset}px`);
   document.documentElement.style.setProperty("--viewport-offset", `${offset}px`);
@@ -1411,6 +1430,7 @@ function updateViewport() {
   // guess at the layout height rather than the measured value.
   document.documentElement.style.setProperty("--viewport-gap", `${Math.max(0, layout - height)}px`);
 }
+// --- end viewport ---
 let viewportFrame = 0;
 function scheduleViewport() {
   if (viewportFrame) return;

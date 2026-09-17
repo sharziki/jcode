@@ -594,8 +594,12 @@ jobs:
       - name: Service worker syntax check
         run: node --check crates/jcode-base/src/gateway/web/sw.js
 
-      - name: Markdown renderer tests
-        run: node --test crates/jcode-base/tests/web_client_markdown.test.js
+      # Run every *.test.js in the directory rather than naming files one by
+      # one. A new suite is otherwise invisible to CI until someone remembers
+      # to add it here, which is a silent gap: the tests pass locally and never
+      # run on a PR.
+      - name: Web client tests
+        run: node --test crates/jcode-base/tests/*.test.js
 
   typescript-sdk:
     name: TypeScript SDK
