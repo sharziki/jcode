@@ -26,6 +26,7 @@ use crate::logging;
 mod auth;
 pub mod control;
 mod registry;
+mod subagents;
 mod web;
 use auth::{
     AuthorizedDevice, WsAuth, WsAuthSource, authorize_ws_device, extract_ws_auth, ws_error_response,
@@ -447,7 +448,9 @@ async fn handle_http(
         // The embedded web client. Served last so a future API route always
         // wins over a same-named asset.
         ("GET", _) => match web::lookup(path_base) {
-            Some((content_type, body)) => web::asset_response(content_type, body),
+            Some((content_type, body)) => {
+                web::asset_response(content_type, body, web::if_none_match(&headers_text))
+            }
             None => {
                 let body = serde_json::json!({"error": "Not found"});
                 http_response(404, "Not Found", &body.to_string())
@@ -517,13 +520,26 @@ async fn handle_sessions_request(
     // Tokio listener. A broken index is an error, never an empty history.
     let sessions =
         match tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<serde_json::Value>> {
-            let entries = crate::recent_session_index::recent_with_backfill(limit)?;
+            // Spawned swarm workers are the agent's own bookkeeping, not
+            // conversations a person started, and they outnumber real chats.
+            // Hide them so this list stays the user's own jcode chats.
+            let hidden = subagents::subagent_session_ids();
+            // Ask for more than `limit` when filtering, so removing workers
+            // does not silently shorten the page below what was requested.
+            let fetch = if hidden.is_empty() {
+                limit
+            } else {
+                limit.saturating_mul(2).max(limit)
+            };
+            let entries = crate::recent_session_index::recent_with_backfill(fetch)?;
             let live: std::collections::HashSet<String> = jcode_storage::session_presence()
                 .into_iter()
                 .map(|presence| presence.session_id)
                 .collect();
             Ok(entries
                 .into_iter()
+                .filter(|entry| !hidden.contains(&entry.session_id))
+                .take(limit)
                 .map(|entry| session_list_value(&entry, live.contains(&entry.session_id)))
                 .collect())
         })

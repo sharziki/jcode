@@ -8,7 +8,7 @@
  */
 "use strict";
 
-const VERSION = "jcode-shell-v2-conversations";
+const VERSION = "jcode-shell-v3-fast";
 const PRECACHE = [
   "/",
   "/index.html",
@@ -51,22 +51,23 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Network-first so a running server always wins, with the cached shell as
-  // the offline fallback. A navigation that misses falls back to the shell so
-  // deep links (#session-id) still open the app.
+  // Stale-while-revalidate for the app shell: serve the cached copy instantly
+  // and refresh it in the background. Network-first meant every launch, even a
+  // warm one on a fast network, paid a full round trip before painting. The
+  // shell is static and versioned, so a one-load-stale copy is harmless, and
+  // live state arrives over /sessions and /ws anyway, which are never cached.
   event.respondWith(
-    fetch(request)
-      .then((response) => {
-        if (response && response.ok) {
-          const copy = response.clone();
-          caches.open(VERSION).then((cache) => cache.put(request, copy));
-        }
-        return response;
-      })
-      .catch(() =>
-        caches
-          .match(request)
-          .then((hit) => hit || (request.mode === "navigate" ? caches.match("/") : undefined)),
-      ),
+    caches.match(request).then((hit) => {
+      const network = fetch(request)
+        .then((response) => {
+          if (response && response.ok) {
+            const copy = response.clone();
+            caches.open(VERSION).then((cache) => cache.put(request, copy));
+          }
+          return response;
+        })
+        .catch(() => hit || (request.mode === "navigate" ? caches.match("/") : undefined));
+      return hit || network;
+    }),
   );
 });

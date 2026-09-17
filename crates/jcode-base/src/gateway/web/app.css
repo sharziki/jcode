@@ -56,11 +56,17 @@
 }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 [hidden] { display: none !important; }
-html, body { margin: 0; width: 100%; height: 100%; overscroll-behavior: none; }
+/* The document must never scroll. The app is a fixed-position box sized to the
+   visible region, so any document scroll is the browser trying to reveal a
+   focused field and only serves to drag the whole UI off screen. */
+html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; overscroll-behavior: none; }
+html { touch-action: manipulation; }
 /* `top` follows visualViewport.offsetTop so the app stays pinned to the region
    iOS actually shows when the keyboard scrolls the layout viewport. Without it
-   the UI slides out of view mid-typing. */
-body { position: fixed; inset: 0; top: var(--viewport-offset, 0px); display: flex; flex-direction: column; height: var(--app-height, 100dvh); overflow: hidden; background: var(--bg); color: var(--text); font: 15px/1.5 var(--sans); -webkit-font-smoothing: antialiased; }
+   the UI slides out of view mid-typing. `bottom: auto` because the explicit
+   height is authoritative; leaving `inset: 0`'s bottom in place fought with it
+   and left the composer and drawer stopping short of the bottom edge. */
+body { position: fixed; left: 0; right: 0; bottom: auto; top: var(--viewport-offset, 0px); display: flex; flex-direction: column; height: var(--app-height, 100dvh); overflow: hidden; background: var(--bg); color: var(--text); font: 15px/1.5 var(--sans); -webkit-font-smoothing: antialiased; }
 button, input, textarea, select { font: inherit; color: inherit; }
 button, select { touch-action: manipulation; }
 button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; border: 0; border-radius: 10px; background: transparent; cursor: pointer; }
@@ -185,7 +191,7 @@ button:not(:disabled):active { transform: scale(.98); }
 .composer { padding: 8px 8px 9px; border: 1px solid var(--border); border-radius: 26px; background: var(--surface); box-shadow: var(--shadow); }
 .composer:focus-within { border-color: var(--border-strong); }
 .composer:has(#composer-input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 3px; }
-#composer-input { padding: 11px 11px 8px; min-height: 55px; max-height: min(32dvh, 240px); resize: none; border: 0; border-radius: 0; background: transparent; line-height: 1.5; display: block; }
+#composer-input { padding: 11px 11px 8px; min-height: 55px; max-height: min(calc(var(--app-height, 100dvh) * .32), 240px); resize: none; border: 0; border-radius: 0; background: transparent; line-height: 1.5; display: block; }
 #composer-input:focus { outline: none; }
 .composer-toolbar { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .project-chip, .model-chip { min-width: 0; color: var(--text-2); font-size: 12px; border-radius: 24px; padding: 0 9px; gap: 5px; }
@@ -206,8 +212,11 @@ dialog { color: var(--text); background: var(--bg); border: 0; padding: 0; max-w
 dialog::backdrop { background: #15141035; backdrop-filter: blur(2px); }
 /* Track --app-height, not 100dvh: dvh ignores the software keyboard, so with
    the keyboard up the drawer ran ~336px past the visible area and its New chat
-   pill sat off screen. */
-.drawer { inset: 0 auto 0 0; margin: 0; width: min(86vw, 368px); height: var(--app-height, 100dvh); max-height: var(--app-height, 100dvh); background: var(--drawer); border-radius: 0 24px 24px 0; box-shadow: 8px 0 50px #0001; overflow: hidden; }
+   pill sat off screen. Offset deliberately NOT reapplied here: these dialogs
+   resolve their containing block against the already-translated body, so
+   adding --viewport-offset again pushed the drawer down by twice the shift
+   (measured: top 80px for a 40px shift) and ran its footer off screen. */
+.drawer { inset: 0 auto auto 0; margin: 0; width: min(86vw, 368px); height: var(--app-height, 100dvh); max-height: var(--app-height, 100dvh); background: var(--drawer); border-radius: 0 24px 24px 0; box-shadow: 8px 0 50px #0001; overflow: hidden; }
 .drawer[open] { animation: drawer-in 180ms ease-out; }
 @keyframes drawer-in { from { transform: translateX(-20px); opacity: .5; } }
 .drawer-inner { display: flex; flex-direction: column; height: 100%; min-height: 0; padding: calc(var(--safe-top) + 18px) 14px calc(var(--safe-bottom) + 18px); }
@@ -240,8 +249,12 @@ dialog::backdrop { background: #15141035; backdrop-filter: blur(2px); }
 .empty-title { font: 23px var(--serif); margin: 0 0 10px; }
 .empty-hint { color: var(--text-2); font-size: 13px; margin: 0; }
 
-/* Model, project and settings sheets share one geometry. */
-.sheet { width: min(100%, 500px); max-height: 85dvh; margin: auto auto 0; padding: 8px 22px calc(var(--safe-bottom) + 24px); border-radius: 26px 26px 0 0; overflow-y: auto; overscroll-behavior: contain; }
+/* Model, project and settings sheets share one geometry. Bottom-anchored to the
+   visible region: dvh ignores the keyboard, and each of these sheets contains a
+   search or text field, so the keyboard is up exactly when they are open. The
+   body is already translated by --viewport-offset, so `bottom: 0` is the
+   visible bottom here; re-adding the offset would double-count it. */
+.sheet { width: min(100%, 500px); max-height: calc(var(--app-height, 100dvh) * .85); margin: auto auto 0; padding: 8px 22px calc(var(--safe-bottom) + 24px); border-radius: 26px 26px 0 0; overflow-y: auto; overscroll-behavior: contain; position: fixed; left: 0; right: 0; bottom: 0; }
 .sheet[open] { animation: sheet-in 160ms ease-out; }
 @keyframes sheet-in { from { opacity: .6; transform: translateY(16px); } }
 .sheet-handle { height: 4px; width: 32px; border-radius: 10px; background: var(--border-strong); margin: 1px auto 9px; }

@@ -77,22 +77,76 @@ pub(super) fn lookup(path: &str) -> Option<(&'static str, &'static [u8])> {
         .map(|asset| (asset.content_type, asset.body))
 }
 
+/// A content-addressed ETag for an asset body.
+///
+/// FNV-1a over the bytes. The assets are embedded at compile time, so the tag
+/// changes exactly when the shipped file changes, which is the only property a
+/// validator needs. This is not a security boundary, so a non-cryptographic
+/// hash is the right cost.
+fn etag(body: &[u8]) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in body {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100_0000_01b3);
+    }
+    format!("\"{hash:016x}\"")
+}
+
+/// Whether an `If-None-Match` header matches this asset's current tag.
+///
+/// Handles the comma-separated list form and the `W/` weak prefix that
+/// browsers send back, plus `*`.
+pub(super) fn matches_etag(if_none_match: &str, tag: &str) -> bool {
+    if_none_match.split(',').any(|candidate| {
+        let candidate = candidate.trim();
+        candidate == "*" || candidate.trim_start_matches("W/") == tag
+    })
+}
+
+/// Extract the `If-None-Match` value from a raw request head, if present.
+pub(super) fn if_none_match(headers_text: &str) -> Option<&str> {
+    headers_text.lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        name.trim()
+            .eq_ignore_ascii_case("if-none-match")
+            .then(|| value.trim())
+    })
+}
+
 /// Build an HTTP response for a static asset.
 ///
 /// The service worker is served `no-cache` so a client can never pin itself to
 /// a stale worker that then keeps serving a stale app forever. Everything else
 /// is revalidated too, because the app is small and served over a LAN or
 /// Tailscale link where correctness beats a few saved kilobytes.
-pub(super) fn asset_response(content_type: &str, body: &[u8]) -> Vec<u8> {
+///
+/// Revalidation still costs a round trip, but with an `ETag` the round trip
+/// returns an empty `304` instead of re-sending the whole client on every
+/// launch. Correctness is unchanged: the server still decides what is fresh.
+pub(super) fn asset_response(content_type: &str, body: &[u8], if_none_match: Option<&str>) -> Vec<u8> {
+    let tag = etag(body);
+
+    if if_none_match.is_some_and(|header| matches_etag(header, &tag)) {
+        return format!(
+            "HTTP/1.1 304 Not Modified\r\n\
+             ETag: {tag}\r\n\
+             Cache-Control: no-cache\r\n\
+             Connection: close\r\n\r\n"
+        )
+        .into_bytes();
+    }
+
     let mut response = format!(
         "HTTP/1.1 200 OK\r\n\
          Content-Type: {}\r\n\
          Content-Length: {}\r\n\
+         ETag: {}\r\n\
          Cache-Control: no-cache\r\n\
          X-Content-Type-Options: nosniff\r\n\
          Connection: close\r\n\r\n",
         content_type,
-        body.len()
+        body.len(),
+        tag
     )
     .into_bytes();
     response.extend_from_slice(body);
@@ -225,10 +279,95 @@ mod tests {
 
     #[test]
     fn asset_response_has_well_formed_headers() {
-        let response = asset_response("text/css; charset=utf-8", b"body{}");
+        let response = asset_response("text/css; charset=utf-8", b"body{}", None);
         let text = String::from_utf8_lossy(&response);
         assert!(text.starts_with("HTTP/1.1 200 OK\r\n"));
         assert!(text.contains("Content-Length: 6\r\n"));
         assert!(text.ends_with("\r\n\r\nbody{}"));
+    }
+
+    /// Pull the quoted ETag value out of a response head.
+    fn tag_of(response: &[u8]) -> String {
+        let text = String::from_utf8_lossy(response).into_owned();
+        let line = text
+            .lines()
+            .find(|l| l.starts_with("ETag: "))
+            .expect("response carries an ETag");
+        line["ETag: ".len()..].trim().to_string()
+    }
+
+    #[test]
+    fn a_matching_etag_returns_304_without_a_body() {
+        let body = b"body{}";
+        let first = asset_response("text/css; charset=utf-8", body, None);
+        let tag = tag_of(&first);
+
+        let second = asset_response("text/css; charset=utf-8", body, Some(&tag));
+        let text = String::from_utf8_lossy(&second);
+        assert!(text.starts_with("HTTP/1.1 304 Not Modified\r\n"));
+        assert!(
+            !text.contains("body{}"),
+            "304 must not resend the asset, that is the whole point"
+        );
+    }
+
+    #[test]
+    fn a_stale_etag_returns_the_full_asset() {
+        let response = asset_response("text/css; charset=utf-8", b"body{}", Some("\"outdated\""));
+        let text = String::from_utf8_lossy(&response);
+        assert!(text.starts_with("HTTP/1.1 200 OK\r\n"));
+        assert!(text.ends_with("\r\n\r\nbody{}"));
+    }
+
+    #[test]
+    fn etags_track_content_not_content_type() {
+        let a = tag_of(&asset_response("text/css; charset=utf-8", b"one", None));
+        let b = tag_of(&asset_response("text/css; charset=utf-8", b"two", None));
+        assert_ne!(a, b, "different bytes must not share a validator");
+
+        let same = tag_of(&asset_response("text/plain; charset=utf-8", b"one", None));
+        assert_eq!(a, same, "the tag validates the body, and only the body");
+    }
+
+    /// Browsers echo tags back weak-prefixed and comma-joined.
+    #[test]
+    fn weak_and_list_form_if_none_match_still_match() {
+        let tag = tag_of(&asset_response("text/css; charset=utf-8", b"body{}", None));
+
+        for header in [
+            format!("W/{tag}"),
+            format!("\"other\", {tag}"),
+            format!("W/\"other\", W/{tag}"),
+            "*".to_string(),
+        ] {
+            let response = asset_response("text/css; charset=utf-8", b"body{}", Some(&header));
+            assert!(
+                String::from_utf8_lossy(&response).starts_with("HTTP/1.1 304"),
+                "If-None-Match: {header} should validate"
+            );
+        }
+    }
+
+    #[test]
+    fn if_none_match_is_parsed_case_insensitively_from_the_request_head() {
+        let head = "GET /app.js HTTP/1.1\r\nHost: x\r\nif-none-match: \"abc\"\r\n";
+        assert_eq!(if_none_match(head), Some("\"abc\""));
+
+        let absent = "GET /app.js HTTP/1.1\r\nHost: x\r\n";
+        assert_eq!(if_none_match(absent), None);
+    }
+
+    /// A stale validator for a *different* asset must never suppress a body.
+    #[test]
+    fn one_assets_tag_does_not_validate_another() {
+        let (_, js) = lookup("/app.js").expect("app.js");
+        let (_, css) = lookup("/app.css").expect("app.css");
+        let js_tag = tag_of(&asset_response("application/javascript", js, None));
+
+        let response = asset_response("text/css; charset=utf-8", css, Some(&js_tag));
+        assert!(
+            String::from_utf8_lossy(&response).starts_with("HTTP/1.1 200 OK"),
+            "app.js's tag must not validate app.css"
+        );
     }
 }

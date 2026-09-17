@@ -3,7 +3,10 @@
   <head>
     <meta charset="utf-8" />
     <title>jcode</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <!-- interactive-widget=resizes-content makes Chrome/Android shrink the layout
+         viewport for the on-screen keyboard, so dvh stays honest and nothing has
+         to be repositioned in JS. iOS ignores it; visualViewport covers that. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
     <meta name="theme-color" content="#faf9f6" />
     <meta name="color-scheme" content="light dark" />
     <meta name="mobile-web-app-capable" content="yes" />
@@ -14,6 +17,13 @@
     <link rel="icon" href="/icon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="/icon-192.png" />
     <link rel="stylesheet" href="/app.css" />
+    <!-- Fetched in parallel with the stylesheet instead of waiting for the
+         parser to reach the end of <body>, which is where the tag still sits so
+         the DOM is guaranteed present when it runs. `defer` keeps it
+         non-blocking; the preload is what actually starts the download early.
+         /sessions is deliberately not preloaded: it needs an Authorization
+         header a preload cannot carry, so it would just 401 and be re-fetched. -->
+    <link rel="preload" href="/app.js" as="script" />
   </head>
   <body>
     <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -135,6 +145,6 @@
 
     <div id="toast" class="toast" role="status" hidden></div>
     <noscript><p class="noscript">Enable JavaScript to connect to your Jcode server. Your conversations are stored on your computer.</p></noscript>
-    <script src="/app.js"></script>
+    <script src="/app.js" defer></script>
   </body>
 </html>

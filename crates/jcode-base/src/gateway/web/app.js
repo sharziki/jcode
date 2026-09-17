@@ -211,7 +211,9 @@ function filteredSessions() {
 function renderSessions() {
   const visible = filteredSessions();
   const signature = JSON.stringify([visible, connection.sessionID, showAll, $("session-search")?.value, $("project-filter")?.value]);
-  setStatus(el.sessionsStatus, `${visible.length} conversation${visible.length === 1 ? "" : "s"}${!showAll && sessions.some((s) => s.message_count === 0 && !s.saved) ? " · Empty chats hidden. Show all to see them." : ""}`);
+  // No conversation count: this is a single-user client, so "1,999 conversations"
+  // is noise. Only the one fact that changes behaviour is worth a line.
+  setStatus(el.sessionsStatus, !showAll && sessions.some((s) => s.message_count === 0 && !s.saved) ? "Empty chats hidden. Show all to see them." : "");
   // Do not destroy keyboard focus in the drawer every three seconds.
   if (el.sessionList.dataset.signature === signature) return;
   el.sessionList.dataset.signature = signature;
@@ -1199,15 +1201,38 @@ function renderHistory(event, preservePosition = false) {
 }
 
 // Navigation starts with a local welcome, and creates a real session only when needed.
+// Set while a switch is in flight. A second tap on a phone arrives well before
+// the socket attaches, and without this it started a second connection to the
+// same chat and re-rendered the transcript underneath the first.
+let switching = "";
 function openChat(session, push = true) {
   if (!credentials.load()) return openPairing();
+  if (switching && switching === session.id) { closeDialogs(); show(el.chatView); return; }
+  // Re-selecting the chat you are already in must be a no-op, not a reload.
+  // Without this, tapping the current row in the drawer pushed another history
+  // entry for the same chat and tore down a healthy socket, so Back appeared to
+  // "take you to the same chat multiple times" and the transcript flickered.
+  if (session.id && session.id === connection.sessionID && !connection.stopped) {
+    closeDialogs();
+    show(el.chatView);
+    return;
+  }
+  switching = session.id || "";
+  // Cleared on a timer, not on attach: a chat that fails to connect must not
+  // become permanently unopenable. One second is far longer than a double tap
+  // and far shorter than a user's next deliberate switch.
+  setTimeout(() => { if (switching === (session.id || "")) switching = ""; }, 1000);
   saveDraft(); closeDialogs(); show(el.chatView); resetView();
   view.knownTitle = session.title || "New conversation"; view.model = session.model || ""; view.models = [];
   view.queuedSend = false; view.modelRequest = null; view.renameRequest = null;
   workingDir = validDirectory(session.working_dir) ? session.working_dir : "";
   el.chatTitle.textContent = view.knownTitle; loadDraft(session.id);
   connection.start(credentials.load().token, session.id);
-  if (push) history.pushState({ session: session.id }, "", `#${encodeURIComponent(session.id)}`);
+  // Replace rather than push when the URL already points at this chat,
+  // otherwise every visit stacks a duplicate entry that Back has to walk.
+  const hash = `#${encodeURIComponent(session.id)}`;
+  if (!push || location.hash === hash) history.replaceState({ session: session.id }, "", hash);
+  else history.pushState({ session: session.id }, "", hash);
   refreshSessions();
 }
 async function newChat(push = true) {
@@ -1217,7 +1242,9 @@ async function newChat(push = true) {
   view.knownTitle = ""; view.model = ""; view.models = []; view.queuedSend = false; view.modelRequest = null; view.renameRequest = null;
   workingDir = availableDirectories()[0] || "";
   el.chatTitle.textContent = "New conversation"; loadDraft("new"); setPhase("new");
-  if (push) history.pushState({}, "", "#");
+  // Same rule as openChat: do not stack duplicate "new chat" entries.
+  if (!push || location.hash === "#" || location.hash === "") history.replaceState({}, "", "#");
+  else history.pushState({}, "", "#");
   await refreshSessions();
 }
 function ensureSession() {
@@ -1321,24 +1348,62 @@ on("theme-select", "change", () => { const value = $("theme-select").value; if (
 colorScheme.addEventListener?.("change", applyTheme);
 function updateViewport() {
   const viewport = window.visualViewport;
-  const height = viewport?.height || window.innerHeight;
-  document.documentElement.style.setProperty("--app-height", `${height}px`);
-  // iOS does not just shrink the visual viewport for the keyboard, it also
-  // scrolls the layout viewport underneath it. Without compensating for
-  // offsetTop the whole app slides up out of view while typing, which is the
-  // "viewport breaks when I type" report. Translating by offsetTop pins the
-  // app to the visible region instead.
+  // iOS scrolls the layout viewport to reveal a focused field, carrying this
+  // fixed-position app up and off screen. The app never scrolls the document
+  // itself, so any document scroll is the browser's doing and is safe to undo.
+  // This must happen before measuring, or we measure the broken state.
+  if (window.scrollY || window.scrollX) window.scrollTo(0, 0);
+
+  // The layout viewport is the honest full height. visualViewport.height alone
+  // is wrong twice over: it shrinks under pinch-zoom (which made the composer
+  // and drawer stop short of the bottom edge) and it is the only thing that
+  // reacts to the keyboard. So measure the layout box, then subtract only the
+  // part the keyboard actually covers.
+  const layout = Math.round(document.documentElement.clientHeight || window.innerHeight);
+  // Re-read offsetTop after the scroll reset. Whatever survives is a genuine
+  // visual-viewport shift that scrollTo cannot undo, so the app has to be
+  // translated by it instead. Undoing the scroll first keeps this from
+  // double-counting, which is what left a gap at the bottom before.
   const offset = Math.max(0, Math.round(viewport?.offsetTop || 0));
+  let height = layout;
+  if (viewport) {
+    const covered = layout - Math.round(viewport.height) - offset;
+    // Ignore sub-100px deltas: those are URL-bar chrome and zoom rounding, not
+    // a keyboard, and reacting to them made the layout jitter while scrolling.
+    if (covered > 100) height = layout - covered;
+  }
+  document.documentElement.style.setProperty("--app-height", `${height - offset}px`);
   document.documentElement.style.setProperty("--viewport-offset", `${offset}px`);
 }
-window.visualViewport?.addEventListener("resize", updateViewport);
+let viewportFrame = 0;
+function scheduleViewport() {
+  if (viewportFrame) return;
+  viewportFrame = requestAnimationFrame(() => { viewportFrame = 0; updateViewport(); });
+}
+window.visualViewport?.addEventListener("resize", scheduleViewport);
 // offsetTop changes on scroll without a resize, e.g. when focus moves between
 // fields while the keyboard is already up.
-window.visualViewport?.addEventListener("scroll", updateViewport);
-window.addEventListener("resize", updateViewport);
+window.visualViewport?.addEventListener("scroll", scheduleViewport);
+window.addEventListener("resize", scheduleViewport);
+// Focusing an input is what triggers the scroll-away. The composer is focused
+// throughout a conversation, not just at boot, and the transcript grows taller
+// as the chat continues, so this fires on every refocus mid-chat, not only on
+// the first one. Catch it directly rather than waiting for a viewport event
+// that may arrive a frame too late.
+window.addEventListener("focusin", scheduleViewport);
+window.addEventListener("focusout", scheduleViewport);
+// Some iOS scroll-aways emit only a document scroll. Correct it in the same
+// frame so the app never visibly leaves the screen.
+window.addEventListener("scroll", () => { if (window.scrollY || window.scrollX) scheduleViewport(); }, { passive: true });
 window.addEventListener("popstate", () => {
   let id; try { id = decodeURIComponent(location.hash.slice(1)); } catch { id = ""; }
-  if (id) openChat(sessions.find((s) => s.id === id) || { id }, false); else newChat(false);
+  // iOS fires popstate for scroll restoration and hash normalisation, not just
+  // real navigation. Reopening the chat that is already on screen restarted its
+  // socket and re-rendered the transcript for no reason, which read as the app
+  // bouncing back to the same chat. Only act on an actual change.
+  if (id) {
+    if (id !== connection.sessionID) openChat(sessions.find((s) => s.id === id) || { id }, false);
+  } else if (connection.sessionID) newChat(false);
 });
 function foreground() {
   if (document.visibilityState !== "visible") return;
@@ -1360,7 +1425,10 @@ window.addEventListener("offline", () => {
 });
 window.addEventListener("pagehide", () => { saveDraft(); clearTimeout(directoryTimer); connection.closeSocket(); });
 window.addEventListener("pageshow", foreground);
-if ("serviceWorker" in navigator && window.isSecureContext) window.addEventListener("load", () => { navigator.serviceWorker.register("/sw.js").catch(() => {}); });
+// Registered immediately rather than on `load`: waiting for `load` delayed the
+// first install until after every subresource had settled, so the very first
+// launch never got a warm cache and the second launch paid for it.
+if ("serviceWorker" in navigator && window.isSecureContext) navigator.serviceWorker.register("/sw.js").catch(() => {});
 (function boot() {
   applyTheme(); updateViewport();
   // Load before any save to avoid overwriting the durable new-chat draft at boot.
