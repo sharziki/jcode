@@ -409,3 +409,79 @@ fn test_sessions_report_newest_activity_not_just_last_resume() {
     );
     assert_eq!(value["updated_at_ms"], 7_000);
 }
+
+/// The web client downloads `history.images` and never reads it: every
+/// `images` reference in app.js is outbound, for uploading. Measured here,
+/// that dead weight is 77% of session bytes (84.8MB of 110MB across the 15
+/// largest sessions), crossing a phone connection on every chat open.
+///
+/// These tests pin both halves: the bytes really go, and nothing else does.
+#[test]
+fn history_images_are_elided_for_the_browser() {
+    let big = "A".repeat(50_000);
+    let payload = serde_json::json!({
+        "type": "history",
+        "id": 7,
+        "session_id": "session_x",
+        "messages": [{"role": "user", "content": "hi"}],
+        "images": [
+            {"media_type": "image/png", "data": big, "anchor": {"message_index": 3}},
+            {"media_type": "image/jpeg", "data": "QUJD"}
+        ]
+    })
+    .to_string();
+    let before = payload.len();
+
+    let after = strip_history_images(payload);
+    assert!(
+        after.len() < before / 10,
+        "payload should collapse: {before} -> {}",
+        after.len()
+    );
+
+    let value: serde_json::Value = serde_json::from_str(&after).expect("valid json");
+    let images = value["images"].as_array().expect("images array");
+
+    // Length is preserved so a client can still tell how many images exist.
+    assert_eq!(images.len(), 2);
+    // Bytes are gone, but the metadata a lazy fetch would need survives.
+    assert_eq!(images[0]["data"], "");
+    assert_eq!(images[0]["elided"], true);
+    assert_eq!(images[0]["media_type"], "image/png");
+    assert_eq!(images[0]["byte_length"], 50_000);
+    assert_eq!(images[0]["anchor"]["message_index"], 3);
+    assert_eq!(images[1]["media_type"], "image/jpeg");
+
+    // Everything outside `images` must be untouched.
+    assert_eq!(value["id"], 7);
+    assert_eq!(value["session_id"], "session_x");
+    assert_eq!(value["messages"][0]["content"], "hi");
+}
+
+#[test]
+fn non_history_events_pass_through_byte_for_byte() {
+    // Deltas are the hot path and the overwhelming majority of traffic. A
+    // re-serialize here would reorder keys and burn CPU per token.
+    for payload in [
+        r#"{"type":"text_delta","text":"hello"}"#,
+        // Mentions images but is not a history event: must not be rewritten.
+        r#"{"type":"message","images":[["image/png","QUJD"]]}"#,
+        // A history event with no images needs no work.
+        r#"{"type":"history","id":1,"messages":[]}"#,
+        // Malformed JSON must be forwarded, never dropped or panicked on.
+        r#"{"type":"history","images":[ truncated"#,
+        "",
+    ] {
+        assert_eq!(
+            strip_history_images(payload.to_string()),
+            payload,
+            "should pass through unchanged: {payload}"
+        );
+    }
+}
+
+#[test]
+fn an_empty_images_array_is_left_alone() {
+    let payload = r#"{"type":"history","id":2,"images":[],"messages":[]}"#.to_string();
+    assert_eq!(strip_history_images(payload.clone()), payload);
+}

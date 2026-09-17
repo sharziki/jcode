@@ -294,8 +294,9 @@ async fn handle_ws_connection(
                 Ok(_) => {
                     let trimmed = line.trim_end().to_string();
                     if !trimmed.is_empty() {
+                        let payload = strip_history_images(trimmed);
                         let mut sink = sink_for_unix.lock().await;
-                        if sink.send(Message::Text(trimmed)).await.is_err() {
+                        if sink.send(Message::Text(payload)).await.is_err() {
                             break;
                         }
                     }
@@ -322,6 +323,69 @@ async fn handle_ws_connection(
 
     logging::info(&format!("Gateway: {} disconnected", device_name));
     Ok(())
+}
+
+/// Drop base64 image payloads from a `history` event bound for the web client.
+///
+/// Measured on this install: **77% of session bytes are base64 image data**
+/// (84.8MB of 110MB across the 15 largest sessions). The web client never reads
+/// `history.images` at all — every reference in `app.js` is outbound, for
+/// uploading — so those bytes cross a phone connection and are thrown away. One
+/// screenshot accounted for 272KB of a 1.3MB session, re-sent in full on every
+/// open, and a 1.5MB payload took 909ms to write while encoding took 2ms.
+///
+/// Applied at the **gateway**, deliberately not in the protocol: the TUI renders
+/// these images and must keep receiving them. Only the browser bridge strips.
+///
+/// Each image becomes a placeholder that preserves the array length plus each
+/// entry's `media_type` and `anchor`, so a future client can show a stub and
+/// fetch bytes on demand without a protocol change.
+fn strip_history_images(payload: String) -> String {
+    // Cheap pre-filter: nearly every event is a delta with no image data, and
+    // those must not pay for a JSON parse.
+    if !payload.contains("\"images\"") || !payload.contains("\"history\"") {
+        return payload;
+    }
+
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&payload) else {
+        return payload;
+    };
+    if value.get("type").and_then(|t| t.as_str()) != Some("history") {
+        return payload;
+    }
+    let Some(images) = value.get_mut("images").and_then(|i| i.as_array_mut()) else {
+        return payload;
+    };
+    if images.is_empty() {
+        return payload;
+    }
+
+    for image in images.iter_mut() {
+        let media_type = image
+            .get("media_type")
+            .and_then(|m| m.as_str())
+            .unwrap_or("image/png")
+            .to_string();
+        let anchor = image.get("anchor").cloned();
+        let bytes = image
+            .get("data")
+            .and_then(|d| d.as_str())
+            .map_or(0, str::len);
+
+        let mut stub = serde_json::Map::new();
+        stub.insert("media_type".into(), serde_json::Value::String(media_type));
+        // Empty rather than absent: `data` is a required field on the type, so
+        // removing it would break a strict deserializer.
+        stub.insert("data".into(), serde_json::Value::String(String::new()));
+        stub.insert("elided".into(), serde_json::Value::Bool(true));
+        stub.insert("byte_length".into(), serde_json::Value::from(bytes));
+        if let Some(anchor) = anchor {
+            stub.insert("anchor".into(), anchor);
+        }
+        *image = serde_json::Value::Object(stub);
+    }
+
+    serde_json::to_string(&value).unwrap_or(payload)
 }
 
 /// Finds the end of HTTP headers (`\r\n\r\n`), returning the offset of the
