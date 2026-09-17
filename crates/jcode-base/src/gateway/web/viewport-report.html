@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>viewport report</title>
+    <!-- Deliberately identical to the app's meta so the numbers describe the
+         same conditions the app experiences. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
+    <style>
+      html, body { margin: 0; height: 100%; background: #111; color: #eee;
+        font: 13px/1.5 ui-monospace, Menlo, monospace; }
+      body { padding: env(safe-area-inset-top) 12px env(safe-area-inset-bottom); }
+      h1 { font-size: 15px; margin: 12px 0 4px; }
+      p { color: #999; margin: 0 0 10px; }
+      textarea { width: 100%; box-sizing: border-box; font: inherit; padding: 10px;
+        background: #1b1b1b; color: #eee; border: 1px solid #444; border-radius: 8px; }
+      pre { background: #1b1b1b; padding: 10px; border-radius: 8px; overflow-x: auto;
+        border: 1px solid #333; }
+      .row { display: flex; gap: 8px; margin: 8px 0; }
+      button { flex: 1; padding: 12px; font: inherit; background: #2a2a2a; color: #eee;
+        border: 1px solid #555; border-radius: 8px; }
+      b { color: #ffb86b; }
+    </style>
+  </head>
+  <body>
+    <h1>viewport report</h1>
+    <p>Tap the box, let the keyboard open, then press <b>Copy</b> and paste it back.</p>
+    <textarea id="probe" rows="2" placeholder="tap here to raise the keyboard"></textarea>
+    <div class="row">
+      <button id="copy">Copy</button>
+      <button id="clear">Reset</button>
+    </div>
+    <pre id="out">measuring…</pre>
+    <script>
+      // Standalone on purpose: it must not depend on app.js, since app.js is
+      // what is under suspicion.
+      const out = document.getElementById("out");
+      const log = [];
+      function sample(label) {
+        const v = window.visualViewport;
+        const s = {
+          label,
+          layoutClientH: document.documentElement.clientHeight,
+          innerHeight: window.innerHeight,
+          vvHeight: v ? Math.round(v.height) : null,
+          vvOffsetTop: v ? Math.round(v.offsetTop) : null,
+          vvPageTop: v ? Math.round(v.pageTop) : null,
+          vvScale: v ? +(v.scale || 1).toFixed(2) : null,
+          scrollY: Math.round(window.scrollY),
+          screenH: window.screen?.height,
+          dpr: window.devicePixelRatio,
+          focused: document.activeElement?.tagName || null,
+          ua: navigator.userAgent.slice(0, 80),
+          standalone: window.matchMedia("(display-mode: standalone)").matches,
+        };
+        log.push(s);
+        if (log.length > 12) log.shift();
+        out.textContent = JSON.stringify(log, null, 1);
+        return s;
+      }
+      sample("load");
+      window.visualViewport?.addEventListener("resize", () => sample("vv-resize"));
+      window.visualViewport?.addEventListener("scroll", () => sample("vv-scroll"));
+      window.addEventListener("focusin", () => setTimeout(() => sample("focusin+250"), 250));
+      window.addEventListener("focusout", () => setTimeout(() => sample("focusout+250"), 250));
+      document.getElementById("copy").addEventListener("click", async () => {
+        const text = JSON.stringify(log, null, 1);
+        try { await navigator.clipboard.writeText(text); out.textContent = "copied!\n\n" + text; }
+        catch { const t = document.getElementById("probe"); t.value = text; t.select(); }
+      });
+      document.getElementById("clear").addEventListener("click", () => {
+        log.length = 0; document.getElementById("probe").blur(); sample("reset");
+      });
+    </script>
+  </body>
+</html>

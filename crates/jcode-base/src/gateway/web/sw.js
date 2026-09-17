@@ -8,7 +8,9 @@
  */
 "use strict";
 
-const VERSION = "jcode-shell-v3-fast";
+// Bump on every shell change. The old cache is deleted on activate, so a stale
+// version would otherwise keep serving the previous app.js and hide the fix.
+const VERSION = "jcode-shell-v4-images";
 const PRECACHE = [
   "/",
   "/index.html",

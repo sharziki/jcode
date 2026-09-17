@@ -67,6 +67,14 @@ const ASSETS: &[Asset] = &[
         content_type: "image/png",
         body: include_bytes!("web/icon-maskable-512.png"),
     },
+    // A standalone viewport probe, served for diagnosing mobile layout on a
+    // real device. It deliberately shares none of app.js, because app.js is
+    // what it exists to diagnose.
+    Asset {
+        path: "/viewport-report",
+        content_type: "text/html; charset=utf-8",
+        body: include_bytes!("web/viewport-report.html"),
+    },
 ];
 
 /// Look up an embedded asset by request path.

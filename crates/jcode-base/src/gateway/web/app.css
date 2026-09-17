@@ -190,6 +190,17 @@ button:not(:disabled):active { transform: scale(.98); }
 .composer-area { width: calc(100% - 28px); max-width: 792px; flex-shrink: 0; margin: 0 auto; padding: 0 0 max(var(--safe-bottom), 4px); }
 .composer { padding: 8px 8px 9px; border: 1px solid var(--border); border-radius: 26px; background: var(--surface); box-shadow: var(--shadow); }
 .composer:focus-within { border-color: var(--border-strong); }
+
+/* Attachment strip. Thumbnails are square-cropped so a mixed portrait/landscape
+   set still reads as one tidy row. */
+.composer-attachments { display: flex; flex-wrap: wrap; gap: 8px; padding: 6px 6px 2px; }
+.attachment { position: relative; width: 62px; height: 62px; border-radius: 12px; overflow: hidden; border: 1px solid var(--border); background: var(--surface-elevated); }
+.attachment img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.attachment-remove { position: absolute; top: 2px; right: 2px; width: 22px; height: 22px; min-height: 22px; padding: 0; border-radius: 50%; background: #000c; color: #fff; font-size: 15px; line-height: 1; }
+/* Images inside a sent message. max-height keeps a tall screenshot from
+   pushing the rest of the conversation off the screen. */
+.msg-images { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.msg-images img { max-width: 100%; max-height: 260px; border-radius: 12px; display: block; }
 .composer:has(#composer-input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 3px; }
 #composer-input { padding: 11px 11px 8px; min-height: 55px; max-height: min(calc(var(--app-height, 100dvh) * .32), 240px); resize: none; border: 0; border-radius: 0; background: transparent; line-height: 1.5; display: block; }
 #composer-input:focus { outline: none; }

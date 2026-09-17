@@ -8,6 +8,7 @@ for (const id of [
   "sessions-view", "session-list", "sessions-empty", "sessions-status", "sessions-refresh", "sessions-unpair",
   "chat-view", "chat-back", "chat-title", "chat-phase", "transcript", "status-line", "composer",
   "composer-input", "composer-send", "composer-stop",
+  "composer-attach", "composer-file", "composer-attachments",
 ]) el[id.replace(/-([a-z])/g, (_, c) => c.toUpperCase())] = $(id);
 const on = (id, event, handler) => $(id)?.addEventListener(event, handler);
 const storage = {
@@ -962,7 +963,9 @@ function resetView() {
 function updateComposer() {
   const attached = connection.attached && connection.socket?.readyState === WebSocket.OPEN;
   el.composerSend.hidden = false; // Follow-up remains available while a turn is running.
-  el.composerSend.disabled = !el.composerInput.value.trim() || (!attached && !connection.stopped) || Boolean(connection.fatalReason);
+  // An attached image is a sendable message on its own, so the send button
+  // must not stay disabled just because the textarea is empty.
+  el.composerSend.disabled = (!el.composerInput.value.trim() && !attachments.length) || (!attached && !connection.stopped) || Boolean(connection.fatalReason);
   el.composerSend.setAttribute("aria-label", view.processing ? "Send follow-up" : "Send message");
   el.composerStop.hidden = !view.processing;
   el.composerStop.disabled = !attached || view.stopping;
@@ -1297,21 +1300,125 @@ function resizeComposer() {
   el.composerInput.style.height = "auto";
   el.composerInput.style.height = `${Math.min(el.composerInput.scrollHeight, window.innerHeight * 0.4)}px`;
 }
+// --- image attachments ---------------------------------------------------
+// The daemon has always accepted images: wire.rs `Request::Message` carries
+// `images: Vec<(String, String)>`, which the agent turns into
+// `ContentBlock::Image { media_type, data }`. Only this client could not send
+// them. The wire pair is (media_type, base64) with no data: prefix, so the
+// prefix that FileReader produces is stripped below.
+
+// Phones produce 3-12MB HEIC/JPEG frames. Sent raw they would blow past model
+// limits and make an upload feel broken on cellular, so images are downscaled
+// in-browser first. 1568px is Anthropic's long-edge limit, above which the API
+// downsamples anyway, so anything larger is bytes spent for no added detail.
+const IMAGE_MAX_EDGE = 1568;
+const IMAGE_MAX_BYTES = 4 * 1024 * 1024;
+const attachments = [];
+
+async function fileToAttachment(file) {
+  const bitmap = await createImageBitmap(file).catch(() => null);
+  if (!bitmap) throw new Error(`${file.name || "image"} could not be read`);
+  const scale = Math.min(1, IMAGE_MAX_EDGE / Math.max(bitmap.width, bitmap.height));
+  const width = Math.max(1, Math.round(bitmap.width * scale));
+  const height = Math.max(1, Math.round(bitmap.height * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = width; canvas.height = height;
+  canvas.getContext("2d").drawImage(bitmap, 0, 0, width, height);
+  bitmap.close?.();
+  // Re-encode as JPEG: it is universally accepted, whereas HEIC from an iPhone
+  // camera roll is not. PNG would balloon a photograph several times over.
+  const dataURL = canvas.toDataURL("image/jpeg", 0.85);
+  const comma = dataURL.indexOf(",");
+  const data = dataURL.slice(comma + 1);
+  // base64 encodes 3 bytes per 4 chars; close enough to catch a huge frame.
+  if (data.length * 0.75 > IMAGE_MAX_BYTES) throw new Error("image is too large even after resizing");
+  return { mediaType: "image/jpeg", data, preview: dataURL, name: file.name || "image" };
+}
+
+function renderAttachments() {
+  el.composerAttachments.textContent = "";
+  el.composerAttachments.hidden = attachments.length === 0;
+  attachments.forEach((item, index) => {
+    const cell = document.createElement("div");
+    cell.className = "attachment";
+    const img = document.createElement("img");
+    img.src = item.preview; img.alt = item.name;
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "attachment-remove";
+    remove.setAttribute("aria-label", `Remove ${item.name}`);
+    remove.textContent = "×";
+    remove.addEventListener("click", () => { attachments.splice(index, 1); renderAttachments(); updateComposer(); });
+    cell.append(img, remove);
+    el.composerAttachments.append(cell);
+  });
+}
+
+async function addFiles(files) {
+  const images = [...files].filter((f) => f.type.startsWith("image/"));
+  if (!images.length) return;
+  for (const file of images) {
+    try { attachments.push(await fileToAttachment(file)); }
+    catch (error) { toast(error.message || "That image could not be attached"); }
+  }
+  renderAttachments();
+  updateComposer();
+}
+
+on("composer-attach", "click", () => el.composerFile.click());
+on("composer-file", "change", async (event) => {
+  await addFiles(event.target.files || []);
+  // Reset so picking the same photo twice in a row still fires `change`.
+  event.target.value = "";
+});
+// Paste and drag-drop cost almost nothing here and make the desktop client
+// behave the way people expect.
+on("composer-input", "paste", (event) => {
+  const files = [...(event.clipboardData?.files || [])];
+  if (files.length) { event.preventDefault(); addFiles(files); }
+});
+on("composer", "dragover", (event) => event.preventDefault());
+on("composer", "drop", (event) => {
+  const files = [...(event.dataTransfer?.files || [])];
+  if (files.length) { event.preventDefault(); addFiles(files); }
+});
+
 function sendMessage() {
-  const content = el.composerInput.value.trim(); if (!content) return;
+  const content = el.composerInput.value.trim();
+  // An image with no caption is a complete message, so the guard checks both.
+  if (!content && !attachments.length) return;
   saveDraft();
   if (!connection.attached) {
     if (connection.fatalReason || (connection.sessionID && !connection.attached)) { toast("Not connected. Your draft is saved."); return; }
     view.queuedSend = true; ensureSession(); return;
   }
-  const request = view.processing ? { type: "soft_interrupt", content, urgent: false } : { type: "message", content };
+  const images = attachments.map((item) => [item.mediaType, item.data]);
+  const request = view.processing
+    ? { type: "soft_interrupt", content, urgent: false }
+    : { type: "message", content };
+  // Only set the key when non-empty: the daemon skips it when absent, and an
+  // empty array on every plain text message is pure wire noise.
+  if (images.length) request.images = images;
   const id = connection.send(request);
   if (!id) { toast("Not connected. Message not sent. Your draft is saved."); return; }
   const record = draftRecord();
   const pending = { id, content, userCount: el.transcript.querySelectorAll(".msg.user").length };
   record.pending = [...(record.pending || []), pending]; record.text = ""; storage.set(draftKey(), record);
-  if (pending.userCount === 0) usePromptTitle(content);
+  if (pending.userCount === 0 && content) usePromptTitle(content);
   const node = addMessage("user", content); node.dataset.pending = "true";
+  // Echo the thumbnails into the transcript so a sent image is visible
+  // immediately rather than appearing only after the model replies.
+  if (attachments.length) {
+    const strip = document.createElement("div");
+    strip.className = "msg-images";
+    for (const item of attachments) {
+      const img = document.createElement("img");
+      img.src = item.preview; img.alt = item.name; img.loading = "lazy";
+      strip.append(img);
+    }
+    node.prepend(strip);
+  }
+  attachments.length = 0; renderAttachments();
   view.optimistic.push({ ...pending, node, echoes: new Set() });
   if (view.optimistic.length > 100) view.optimistic.shift();
   if (!view.processing) { endStreaming(); setProcessing(true); }
@@ -1429,6 +1536,24 @@ function updateViewport() {
   // the gap here keeps that arithmetic out of CSS, where `100dvh` would be a
   // guess at the layout height rather than the measured value.
   document.documentElement.style.setProperty("--viewport-gap", `${Math.max(0, layout - height)}px`);
+
+  // Diagnostic hook. iOS viewport semantics cannot be reproduced faithfully off
+  // the device (two fixes shipped from reasoning alone were both wrong), so the
+  // real numbers are exposed for `/viewport-report` to read from the phone.
+  window.__viewport = {
+    layout,
+    visual: Math.round(viewport?.height || 0),
+    offsetTop: offset,
+    pageTop: Math.round(viewport?.pageTop || 0),
+    scrollY: Math.round(window.scrollY || 0),
+    covered: viewport ? layout - Math.round(viewport.height) - offset : 0,
+    appHeight: height - offset,
+    gap: Math.max(0, layout - height),
+    focused: document.activeElement?.tagName || null,
+    innerHeight: Math.round(window.innerHeight || 0),
+    screenHeight: Math.round(window.screen?.height || 0),
+    at: Date.now(),
+  };
 }
 // --- end viewport ---
 let viewportFrame = 0;
