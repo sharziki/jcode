@@ -71,7 +71,7 @@ fn initialize(connection: &Connection) -> Result<()> {
              last_active_at_ms INTEGER
          );
          CREATE INDEX IF NOT EXISTS recent_sessions_activity
-         ON recent_sessions(COALESCE(last_active_at_ms, updated_at_ms) DESC);",
+         ON recent_sessions(MAX(COALESCE(last_active_at_ms, 0), updated_at_ms) DESC);",
     )?;
     // Serialize additive migrations across daemon/CLI processes.
     let transaction =
@@ -108,7 +108,7 @@ pub fn recent(limit: usize) -> Result<Vec<RecentSessionMetadata>> {
                 todo_title, saved, updated_at_ms, last_active_at_ms,
                 first_prompt, preview, model, message_count, friendly_name
          FROM recent_sessions
-         ORDER BY COALESCE(last_active_at_ms, updated_at_ms) DESC
+         ORDER BY MAX(COALESCE(last_active_at_ms, 0), updated_at_ms) DESC
          LIMIT ?1",
     )?;
     let entries = statement
@@ -337,7 +337,7 @@ fn backfill(connection: &Connection, limit: usize) -> Result<()> {
         .prepare(
             "SELECT session_id, updated_at_ms FROM
            (SELECT session_id, updated_at_ms, message_count, summary_retry_at_ms
-            FROM recent_sessions ORDER BY COALESCE(last_active_at_ms, updated_at_ms) DESC LIMIT ?1)
+            FROM recent_sessions ORDER BY MAX(COALESCE(last_active_at_ms, 0), updated_at_ms) DESC LIMIT ?1)
          WHERE message_count IS NULL AND summary_retry_at_ms <= ?2 LIMIT 4",
         )?
         .query_map(params![limit.min(500) as i64, now], |row| {

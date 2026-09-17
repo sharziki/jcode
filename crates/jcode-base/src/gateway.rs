@@ -557,7 +557,16 @@ fn session_list_value(
         "message_count": entry.message_count,
         "friendly_name": entry.friendly_name,
         "working_dir": entry.working_dir,
-        "updated_at_ms": entry.last_active_at_ms.unwrap_or(entry.updated_at_ms),
+        // Report the most recent of the two, not last_active alone.
+        // `last_active_at_ms` is only stamped when a session is created or
+        // resumed, so preferring it made every row freeze at the last daemon
+        // restart and age on screen while the conversation was still moving.
+        // `updated_at_ms` advances on each persisted turn, but a resumed
+        // session can legitimately be newer than its last write, so neither
+        // column alone is the answer.
+        "updated_at_ms": entry
+            .last_active_at_ms
+            .map_or(entry.updated_at_ms, |active| active.max(entry.updated_at_ms)),
         "saved": entry.saved,
         "live": live,
     })

@@ -364,3 +364,48 @@ async fn test_sessions_endpoint_uses_real_pid_liveness_and_indexed_metadata() {
         assert_eq!(entry["live"], entry["id"] == "session_live");
     }
 }
+
+#[test]
+fn test_sessions_report_newest_activity_not_just_last_resume() {
+    // `last_active_at_ms` is stamped only when a session is created or resumed.
+    // Preferring it unconditionally froze every row at the last daemon restart:
+    // the conversation kept moving, the list kept saying "32m ago", and the
+    // timestamps aged on screen while the user watched.
+    let base = crate::recent_session_index::RecentSessionMetadata {
+        session_id: "session_horse".into(),
+        ..Default::default()
+    };
+
+    // Turns persisted long after the resume stamp: report the turn.
+    let value = session_list_value(
+        &crate::recent_session_index::RecentSessionMetadata {
+            updated_at_ms: 9_000,
+            last_active_at_ms: Some(1_000),
+            ..base.clone()
+        },
+        true,
+    );
+    assert_eq!(value["updated_at_ms"], 9_000);
+
+    // A fresh resume with no new turns is still genuinely recent: report it.
+    let value = session_list_value(
+        &crate::recent_session_index::RecentSessionMetadata {
+            updated_at_ms: 1_000,
+            last_active_at_ms: Some(9_000),
+            ..base.clone()
+        },
+        true,
+    );
+    assert_eq!(value["updated_at_ms"], 9_000);
+
+    // Never indexed for activity: fall back without panicking.
+    let value = session_list_value(
+        &crate::recent_session_index::RecentSessionMetadata {
+            updated_at_ms: 7_000,
+            last_active_at_ms: None,
+            ..base
+        },
+        false,
+    );
+    assert_eq!(value["updated_at_ms"], 7_000);
+}
