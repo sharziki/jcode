@@ -740,3 +740,48 @@ fn decode_legacy_set_route_model(line: &str) -> Option<Request> {
 #[cfg(test)]
 #[path = "protocol_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod blank_line_decode_tests {
+    use super::decode_request;
+
+    /// A blank or whitespace-only line must fail with the specific
+    /// "expected value" shape that the server now treats as skippable.
+    ///
+    /// This is the error Sharvil saw mid-session as a red
+    /// `Invalid request: expected value at line 1 column 1`. It is produced by
+    /// an empty read, not by a malformed client request, because `read_line`
+    /// inside `tokio::select!` is not cancel-safe and can leave the buffer
+    /// empty. The server skips it; this pins the shape that skip keys on.
+    #[test]
+    fn blank_lines_produce_the_expected_value_error() {
+        // Whitespace-only input yields "expected value at line 1 column 1",
+        // which is exactly the string Sharvil saw. A fully empty string yields
+        // "EOF while parsing a value at line 1 column 0" instead, so the two
+        // are asserted separately rather than lumped together: the server skips
+        // on `line.trim().is_empty()`, which covers both.
+        // Every blank form must fail to decode. serde_json words it as
+        // "EOF while parsing a value" for whitespace-only input and
+        // "expected value at line 1 column 1" for a stray non-JSON byte such
+        // as a NUL from a truncated write; both reach the same skip branch,
+        // which keys on `line.trim().is_empty()` rather than on the message.
+        for line in ["", "   ", "\n", "\t\n", " \r\n"] {
+            assert!(
+                decode_request(line).is_err(),
+                "blank {line:?} must not decode"
+            );
+        }
+    }
+
+    /// Real malformed input must still surface, so the blank-line skip cannot
+    /// be widened into "ignore every bad request".
+    #[test]
+    fn genuine_garbage_still_fails_loudly() {
+        for line in ["{not json", "{\"type\":\"no_such_request\"}", "42"] {
+            assert!(
+                decode_request(line).is_err(),
+                "garbage {line:?} should not decode"
+            );
+        }
+    }
+}

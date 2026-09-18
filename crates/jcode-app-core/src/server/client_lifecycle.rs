@@ -797,6 +797,15 @@ pub(super) async fn handle_client(
             biased;
             // Prioritize direct client I/O so subscribe/ping/message requests do not get
             // starved behind noisy background bus traffic.
+            //
+            // NOTE: `read_line` is not cancel-safe. When one of the other
+            // branches wins this select, bytes already buffered into `line` are
+            // dropped on the floor. In practice `biased` plus the fact that the
+            // other arms all `continue` keeps this rare, and a lost partial line
+            // now degrades to a skipped blank rather than a user-visible
+            // "Invalid request" error (see the decode arm below). Making it
+            // fully safe means owning a persistent read buffer across
+            // iterations, which is a larger change than this fix warrants.
             n = reader.read_line(&mut line) => {
                 let n = match n {
                     Ok(n) => n,
@@ -971,6 +980,18 @@ pub(super) async fn handle_client(
             match decode_request(&line) {
                 Ok(r) => r,
                 Err(e) => {
+                    // A blank line is not a protocol violation. `read_line` in a
+                    // `tokio::select!` is NOT cancel-safe: when another branch
+                    // wins the race, any bytes already read are discarded, and a
+                    // client that writes a stray newline (or a write that lands
+                    // split across the cancellation) leaves `line` empty or
+                    // partial. Reporting that as "Invalid request: expected
+                    // value at line 1 column 1" surfaced a scary red error to
+                    // the user mid-session, for a condition that is entirely
+                    // internal and harmless. Skip it and read the next line.
+                    if line.trim().is_empty() {
+                        continue;
+                    }
                     let event = ServerEvent::Error {
                         id: 0,
                         message: format!("Invalid request: {}", e),
