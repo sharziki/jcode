@@ -650,10 +650,69 @@ mod file_activity_tests;
 /// Idle timeout for the shared server when no clients are connected (5 minutes)
 const IDLE_TIMEOUT_SECS: u64 = 300;
 
+/// Resolve the idle timeout, allowing an always-on deployment to opt out.
+///
+/// The 5-minute default is right for a desktop: a shared server started for a
+/// TUI session should not outlive it. It is wrong for a gateway that exists to
+/// be reachable from a phone at any hour. Under `Restart=always` the two
+/// policies fight, and the daemon crash-loops every 5 minutes forever (observed
+/// on sxna-runtime-01 at 250 restarts, each a clean exit 0, which is invisible
+/// in `systemctl is-active` because the restart wins the race).
+///
+/// `JCODE_SERVER_IDLE_TIMEOUT_SECS=0` disables the idle exit entirely.
+fn idle_timeout_secs() -> Option<u64> {
+    match std::env::var("JCODE_SERVER_IDLE_TIMEOUT_SECS") {
+        Ok(raw) => match raw.trim().parse::<u64>() {
+            Ok(0) => None,
+            Ok(secs) => Some(secs),
+            // An unparseable override must not silently disable the timeout.
+            Err(_) => Some(IDLE_TIMEOUT_SECS),
+        },
+        Err(_) => Some(IDLE_TIMEOUT_SECS),
+    }
+}
+
 /// How often to check whether the embedding model can be unloaded. Keep this
 /// comfortably below the default idle threshold so reclamation is prompt and
 /// predictable rather than delayed by another full sampling interval.
 const EMBEDDING_IDLE_CHECK_SECS: u64 = 10;
+
+#[cfg(test)]
+mod idle_timeout_env_tests {
+    use super::{IDLE_TIMEOUT_SECS, idle_timeout_secs};
+
+    /// These mutate a process-global env var, so they run under one lock and in
+    /// a single test to avoid cross-test interference.
+    #[test]
+    fn env_override_controls_the_idle_exit() {
+        let key = "JCODE_SERVER_IDLE_TIMEOUT_SECS";
+        let restore = std::env::var(key).ok();
+
+        // Default: unset behaves exactly as before this change.
+        unsafe { std::env::remove_var(key) };
+        assert_eq!(idle_timeout_secs(), Some(IDLE_TIMEOUT_SECS));
+
+        // 0 means never exit. This is what an always-on gateway sets; without
+        // it, Restart=always fights the idle exit and the daemon crash-loops
+        // every 5 minutes (250 restarts observed in production).
+        unsafe { std::env::set_var(key, "0") };
+        assert_eq!(idle_timeout_secs(), None);
+
+        // A custom window is honored.
+        unsafe { std::env::set_var(key, "1800") };
+        assert_eq!(idle_timeout_secs(), Some(1800));
+
+        // Garbage must fall back to the default, never to "no timeout":
+        // a typo should not silently pin a daemon forever.
+        unsafe { std::env::set_var(key, "banana") };
+        assert_eq!(idle_timeout_secs(), Some(IDLE_TIMEOUT_SECS));
+
+        match restore {
+            Some(value) => unsafe { std::env::set_var(key, value) },
+            None => unsafe { std::env::remove_var(key) },
+        }
+    }
+}
 
 #[cfg(test)]
 mod idle_monitor_tests {
@@ -1828,19 +1887,24 @@ impl Server {
                     let has_live_headless_worker =
                         has_live_headless_worker(&idle_sessions, &idle_swarm_state).await;
 
-                    if idle_monitor_should_start(count, has_live_headless_worker) {
+                    // Resolved per tick so the log line and the threshold can
+                    // never disagree, and an always-on gateway simply never
+                    // arms the timer.
+                    let idle_limit = idle_timeout_secs();
+
+                    if idle_limit.is_some() && idle_monitor_should_start(count, has_live_headless_worker) {
                         // No clients connected
                         if idle_since.is_none() {
                             idle_since = Some(std::time::Instant::now());
                             crate::logging::info(&format!(
                                 "No clients connected. Server will exit after {} minutes of idle.",
-                                IDLE_TIMEOUT_SECS / 60
+                                idle_limit.unwrap_or(IDLE_TIMEOUT_SECS) / 60
                             ));
                         }
 
                         if let Some(since) = idle_since {
                             let idle_duration = since.elapsed().as_secs();
-                            if idle_duration >= IDLE_TIMEOUT_SECS {
+                            if idle_duration >= idle_limit.unwrap_or(IDLE_TIMEOUT_SECS) {
                                 crate::logging::info(&format!(
                                     "Server idle for {} minutes with no clients. Shutting down.",
                                     idle_duration / 60
