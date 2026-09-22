@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Small deterministic gate. Fail open except destructive host writes and Nova's
+# unsupported managed-brain manual edge path.
+input=$(cat)
+tool=${JCODE_HOOK_TOOL_NAME:-}
+session=${JCODE_HOOK_SESSION_ID:-}
+
+# Any file mutation is non-trivial enough to deserve JCode's native plan,
+# evidence confidence, and delivery-state receipt.
+case "$tool" in
+  Write|write|Edit|edit|multiedit|apply_patch)
+    if [[ -n "$session" && ! -s "$HOME/.jcode/todos/$session.json" ]]; then
+      echo "blocked by jcode-tool-policy: create a todo plan before mutating files so this root task gets an evidence receipt" >&2
+      exit 2
+    fi
+    ;;
+esac
+
+case "$tool" in
+  Bash|bash)
+    if grep -qE 'rm[[:space:]]+(-[a-zA-Z]+[[:space:]]+)*-?[rRf]*[[:space:]]*/([[:space:]]|"|$)|rm -rf /\*|mkfs(\.|[[:space:]])|dd[[:space:]]+if=.*of=/dev/[sv]d|:\(\)\{.*\};:' <<<"$input"; then
+      echo "blocked by jcode-tool-policy: whole-disk destructive command" >&2; exit 2
+    fi
+    if grep -qE 'rm -rf[[:space:]]+(~|\$HOME)(/)?("|,|[[:space:]]|$)' <<<"$input"; then
+      echo "blocked by jcode-tool-policy: refusing to wipe \$HOME" >&2; exit 2
+    fi
+    ;;
+  Write|write|Edit|edit|multiedit)
+    if grep -qE '"file_path"[[:space:]]*:[[:space:]]*"/(etc|boot|sys|proc)/' <<<"$input"; then
+      echo "blocked by jcode-tool-policy: system path write" >&2; exit 2
+    fi
+    ;;
+  mcp__nova__add_link|mcp__nova__remove_link|nova__add_link|nova__remove_link)
+    echo "blocked by jcode-tool-policy: managed Nova rejects manual edge mutation; write [[full/target-slug]] in the canonical page, then verify with get_links/get_backlinks/traverse_graph" >&2
+    exit 2
+    ;;
+esac
+exit 0

@@ -1,0 +1,224 @@
+#!/usr/bin/env python3
+"""Build one evidence receipt per root JCode task family."""
+
+import argparse
+import datetime as dt
+import fcntl
+import json
+import os
+from collections import Counter
+from pathlib import Path
+
+
+def text_blocks(message):
+    content = message.get("content", [])
+    if isinstance(content, str):
+        return content
+    return "\n".join(
+        block.get("text", "")
+        for block in content
+        if isinstance(block, dict) and block.get("type") == "text"
+    )
+
+
+def load_json(path, default):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return default
+
+
+def meaningful_user(message):
+    text = text_blocks(message).strip()
+    return (
+        message.get("role") == "user"
+        and text
+        and message.get("display_role") != "system"
+        and not text.startswith(("<system-reminder>", "[auto]", "[automated "))
+    )
+
+
+def tool_stats(sessions):
+    calls = errors = nova = 0
+    skills = set()
+    for session in sessions:
+        for message in session.get("messages") or []:
+            for block in message.get("content") if isinstance(message.get("content"), list) else []:
+                if not isinstance(block, dict):
+                    continue
+                if block.get("type") == "tool_result" and block.get("is_error"):
+                    errors += 1
+                if block.get("type") != "tool_use":
+                    continue
+                name = block.get("name") or ""
+                calls += 1
+                if name.startswith("mcp__nova__"):
+                    nova += 1
+                data = block.get("input") or {}
+                if name.lower() == "skill" and data.get("skill"):
+                    skills.add(data["skill"])
+                if name == "skill_manage" and data.get("action") == "load" and data.get("name"):
+                    skills.add(data["name"])
+                for nested in data.get("tool_calls") or []:
+                    if isinstance(nested, dict):
+                        nested_name = nested.get("tool") or ""
+                        calls += 1
+                        if nested_name.startswith("mcp__nova__"):
+                            nova += 1
+    return calls, errors, nova, sorted(skills)
+
+
+def parse_time(value):
+    try:
+        return dt.datetime.fromisoformat((value or "").replace("Z", "+00:00")).timestamp()
+    except (ValueError, AttributeError):
+        return 0
+
+
+def max_concurrent(sessions):
+    points = []
+    for session in sessions:
+        start = parse_time(session.get("created_at"))
+        end = max(start, parse_time(session.get("updated_at")))
+        if not start:
+            continue
+        points.extend(((start, 1), (end, -1)))
+    active = peak = 0
+    for _, delta in sorted(points, key=lambda point: (point[0], point[1])):
+        active += delta
+        peak = max(peak, active)
+    return peak
+
+
+def build_receipt(root, family, todos_dir):
+    sid = root["id"]
+    todos = load_json(todos_dir / f"{sid}.json", [])
+    goals = load_json(todos_dir / f"{sid}-goals.json", [])
+    plan = load_json(todos_dir / f"{sid}-plan.json", {})
+    user_messages = [m for m in root.get("messages") or [] if meaningful_user(m)]
+    assistant_messages = [m for m in root.get("messages") or [] if m.get("role") == "assistant" and text_blocks(m).strip()]
+    complete = [t for t in todos if t.get("status") in {"completed", "done"}]
+    confidence_ok = all(
+        t.get("completion_confidence") in {"validated", "verified"}
+        for t in complete
+    ) if complete else False
+    goal_delivered = any(g.get("delivery_state") == "outcome_delivered" for g in goals)
+    loop_closed = any(g.get("closed_feedback_loop") == "closed" for g in goals)
+    evidence = [g.get("stopping_evidence") for g in goals if g.get("stopping_evidence")]
+    tracked = bool(todos or goals or plan)
+    all_complete = bool(todos) and len(complete) == len(todos)
+    if tracked and goal_delivered and loop_closed and evidence and all_complete and confidence_ok:
+        status = "verified"
+    elif tracked and (goal_delivered or all_complete) and assistant_messages:
+        status = "complete_unverified"
+    elif tracked:
+        status = "incomplete"
+    else:
+        status = "untracked"
+    calls, errors, nova, skills = tool_stats(family)
+    models = sorted({s.get("model") for s in family if s.get("model")})
+    children = [s for s in family if s.get("id") != sid]
+    concurrent_children = max_concurrent(children)
+    task_like = tracked or calls > 0 or bool(children)
+    return {
+        "schema_version": 1,
+        "root_session_id": sid,
+        "session_ids": [s.get("id") for s in family],
+        "status": status,
+        "task_like": task_like,
+        "intent": text_blocks(user_messages[0])[:1200] if user_messages else "",
+        "result": text_blocks(assistant_messages[-1])[:3000] if assistant_messages else "",
+        "working_dir": root.get("working_dir"),
+        "created_at": root.get("created_at"),
+        "updated_at": max((s.get("updated_at") or "" for s in family), default=""),
+        "models": models,
+        "primary_model": root.get("model"),
+        "child_sessions": len(children),
+        "max_concurrent_children": concurrent_children,
+        "swarm_cap_violation": concurrent_children > 4,
+        "todo_total": len(todos),
+        "todo_completed": len(complete),
+        "skill_calls": skills,
+        "nova_calls": nova,
+        "tool_calls": calls,
+        "tool_errors": errors,
+        "stopping_evidence": evidence,
+        "goal_delivery_states": sorted({g.get("delivery_state") for g in goals if g.get("delivery_state")}),
+    }
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--session")
+    parser.add_argument("--since-hours", type=float, default=24 * 7)
+    parser.add_argument("--write", action="store_true")
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args()
+    home = Path(os.environ.get("JCODE_HOME", str(Path.home() / ".jcode")))
+    state = Path(os.environ.get("JCODE_STATE_DIR", str(Path.home() / ".local/state/jcode-operator")))
+    sessions = {}
+    cutoff = dt.datetime.now(dt.timezone.utc).timestamp() - args.since_hours * 3600
+    for path in (home / "sessions").glob("*.json"):
+        data = load_json(path, {})
+        if data.get("id"):
+            sessions[data["id"]] = data
+    roots = {}
+    for session in sessions.values():
+        current = session
+        seen = set()
+        while current.get("parent_id") in sessions and current["parent_id"] not in seen:
+            seen.add(current["id"])
+            current = sessions[current["parent_id"]]
+        roots[session["id"]] = current["id"]
+    wanted_root = roots.get(args.session, args.session) if args.session else None
+    receipts = []
+    for root_id in sorted(set(roots.values())):
+        if wanted_root and root_id != wanted_root:
+            continue
+        family = [s for sid, s in sessions.items() if roots.get(sid) == root_id]
+        family_updated = max((s.get("updated_at") or "" for s in family), default="")
+        updated_ts = parse_time(family_updated)
+        if not wanted_root and updated_ts < cutoff:
+            continue
+        receipts.append(build_receipt(sessions[root_id], family, home / "todos"))
+    if args.write:
+        out_dir = state / "receipts"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        for receipt in receipts:
+            path = out_dir / f"{receipt['root_session_id']}.json"
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
+            os.replace(tmp, path)
+        summary_path = state / "receipt-summary.json"
+        with (state / "receipt-summary.lock").open("w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            all_receipts = [load_json(p, {}) for p in out_dir.glob("*.json")]
+            counts = Counter(r.get("status", "unknown") for r in all_receipts)
+            task_like = [r for r in all_receipts if r.get("task_like")]
+            tracked = sum(r.get("status") != "untracked" for r in task_like)
+            summary = {
+                "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+                "root_sessions": len(all_receipts),
+                "task_like_sessions": len(task_like),
+                "tracked_task_receipts": tracked,
+                "receipt_coverage": round(tracked / len(task_like), 4) if task_like else 0,
+                "status": dict(counts),
+                "primary_models": dict(Counter(r.get("primary_model") or "unknown" for r in task_like)),
+                "skill_routed_tasks": sum(bool(r.get("skill_calls")) for r in task_like),
+                "nova_used_tasks": sum(bool(r.get("nova_calls")) for r in task_like),
+                "swarm_cap_violations": sum(bool(r.get("swarm_cap_violation")) for r in task_like),
+            }
+            summary_path.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+    if args.json:
+        print(json.dumps(receipts, ensure_ascii=False, indent=2))
+    else:
+        counts = {}
+        for receipt in receipts:
+            counts[receipt["status"]] = counts.get(receipt["status"], 0) + 1
+        print(f"root tasks: {len(receipts)} " + " ".join(f"{k}={v}" for k, v in sorted(counts.items())))
+        for receipt in receipts:
+            print(f"{receipt['status']:<19} {receipt['root_session_id']} children={receipt['child_sessions']} model={receipt['primary_model']} {receipt['intent'][:80]}")
+
+
+if __name__ == "__main__":
+    main()

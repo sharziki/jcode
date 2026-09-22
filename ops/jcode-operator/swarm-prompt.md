@@ -7,6 +7,8 @@ Spawn only when at least two tasks are independent and useful in parallel.
 - Tell workers they share the codebase and must preserve others' edits.
 - Never duplicate investigation across workers.
 - Parent owns integration, tests, final verification, and user-facing result.
+- Parent owns one root-task receipt. Child sessions are evidence, not separate outcomes.
+- If any worker crashes, parent either redoes its bounded task or records the missing deliverable as incomplete.
 - Prefer one agent when coordination costs more than the task.
 
 Worker completion report: outcome, files changed, verification run, failures or remaining risk.

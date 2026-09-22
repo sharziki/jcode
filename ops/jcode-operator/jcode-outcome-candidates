@@ -25,12 +25,15 @@ args = parser.parse_args()
 
 cutoff = dt.datetime.now(dt.timezone.utc).timestamp() - args.since_hours * 3600
 rows = []
+receipt_dir = Path.home() / ".local/state/jcode-operator/receipts"
 for path in (Path.home() / ".jcode/sessions").glob("*.json"):
     if path.stat().st_mtime < cutoff:
         continue
     try:
         session = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
+        continue
+    if session.get("parent_id"):
         continue
     messages = session.get("messages") or []
     user = next(
@@ -43,9 +46,21 @@ for path in (Path.home() / ".jcode/sessions").glob("*.json"):
     )
     if not user or not assistant or user.startswith("JCODE_OPERATOR_INTERNAL"):
         continue
+    session_id = session.get("id") or path.stem
+    try:
+        receipt = json.loads((receipt_dir / f"{session_id}.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        receipt = {}
     rows.append(
         {
-            "session_id": session.get("id") or path.stem,
+            "session_id": session_id,
+            "receipt_status": receipt.get("status", "missing"),
+            "stopping_evidence": receipt.get("stopping_evidence", []),
+            "child_sessions": receipt.get("child_sessions", 0),
+            "max_concurrent_children": receipt.get("max_concurrent_children", 0),
+            "swarm_cap_violation": receipt.get("swarm_cap_violation", False),
+            "skill_calls": receipt.get("skill_calls", []),
+            "nova_calls": receipt.get("nova_calls", 0),
             "cwd": session.get("working_dir"),
             "model": session.get("model"),
             "updated_at": session.get("updated_at"),
