@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+STATE="$HOME/.local/state/jcode-operator"
+BIN="$HOME/bin"
+mkdir -p "$STATE"
+
+mode="${1:-status}"
+case "$mode" in
+  status)
+    systemctl is-active jcode-operator.timer jcode-operator-weekly.timer 2>/dev/null || true
+    systemctl list-timers 'jcode-operator*.timer' --all --no-pager 2>/dev/null || true
+    test -f "$STATE/last-run.json" && cat "$STATE/last-run.json" || true
+    exit 0
+    ;;
+  doctor)
+    exec "$BIN/jcode-os-doctor" "${@:2}"
+    ;;
+  daily|weekly) ;;
+  *) echo "usage: jcode-operator {status|doctor|daily|weekly}" >&2; exit 2 ;;
+esac
+
+exec 9>"$STATE/run.lock"
+flock -n 9 || exit 0
+
+started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+doctor="$STATE/doctor-$(date -u +%F).log"
+"$BIN/jcode-os-doctor" --fast >"$doctor" 2>&1 || true
+
+prompt="JCODE_OPERATOR_INTERNAL $mode run.
+This is unattended, private, internal maintenance. Never spend money, deploy,
+send messages, delete data, or modify repositories.
+
+1. Run $BIN/jcode-outcome-candidates --since-hours 30 --limit 30.
+2. Keep only substantial completed outcomes with concrete evidence. Ignore
+   greetings, plans, incomplete work, repeated sessions, and unsupported claims.
+3. Read Nova page systems/jcode-outcome-ledger with include_content=true. Create
+   it if absent; otherwise preserve its full content and update with the required
+   revision precondition. Append compact dated entries: goal, repository, result,
+   evidence, model, remaining risk, next action, and source session id.
+4. Verify the Nova write by reading the page back. Do not claim success otherwise.
+5. Read $doctor. Report health failures exactly.
+"
+
+if [[ "$mode" == weekly ]]; then
+  prompt+="
+6. Run $BIN/jcode-utilization 7. Append one weekly efficiency entry to the same
+   Nova page: skill adoption, tool failures, model mix, noisy workspaces, and no
+   more than three concrete changes for next week. Never call tools to inflate usage."
+fi
+
+output="$STATE/$mode-$(date -u +%Y%m%dT%H%M%SZ).json"
+set +e
+JCODE_HOOKS_DISABLED=1 "$BIN/jcode" --no-update --no-selfdev run --json \
+  --model gpt-5.6-sol --mcp-tools deferred "$prompt" >"$output" 2>"$output.stderr"
+rc=$?
+set -e
+
+python3 - "$STATE/last-run.json" "$mode" "$started" "$rc" "$output" <<'PY'
+import json, sys
+from datetime import datetime, timezone
+path, mode, started, rc, output = sys.argv[1:]
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump({"mode": mode, "started_at": started,
+               "finished_at": datetime.now(timezone.utc).isoformat(),
+               "exit_code": int(rc), "output": output}, handle, indent=2)
+    handle.write("\n")
+PY
+exit "$rc"

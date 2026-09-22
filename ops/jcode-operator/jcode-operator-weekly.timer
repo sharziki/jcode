@@ -1,0 +1,10 @@
+[Unit]
+Description=Weekly JCode Operator efficiency review
+
+[Timer]
+OnCalendar=Sun *-*-* 09:00:00 America/New_York
+Persistent=true
+RandomizedDelaySec=15min
+
+[Install]
+WantedBy=timers.target

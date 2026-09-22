@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+if [[ "${1:-}" == "run" ]]; then
+  shift
+  exec "$HOME/bin/jcode-run-remote" run --model claude-opus-5 "$@"
+fi
+exec "$HOME/bin/jcode-remote" --model claude-opus-5 "$@"

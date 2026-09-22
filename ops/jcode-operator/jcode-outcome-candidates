@@ -1,0 +1,58 @@
+#!/usr/bin/env python3
+"""Print recent final user/assistant pairs for outcome-ledger review."""
+
+import argparse
+import datetime as dt
+import json
+from pathlib import Path
+
+
+def text_blocks(message):
+    content = message.get("content", [])
+    if isinstance(content, str):
+        return content
+    return "\n".join(
+        block.get("text", "")
+        for block in content
+        if isinstance(block, dict) and block.get("type") == "text"
+    )
+
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--since-hours", type=float, default=30)
+parser.add_argument("--limit", type=int, default=30)
+args = parser.parse_args()
+
+cutoff = dt.datetime.now(dt.timezone.utc).timestamp() - args.since_hours * 3600
+rows = []
+for path in (Path.home() / ".jcode/sessions").glob("*.json"):
+    if path.stat().st_mtime < cutoff:
+        continue
+    try:
+        session = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        continue
+    messages = session.get("messages") or []
+    user = next(
+        (text_blocks(m) for m in reversed(messages) if m.get("role") == "user" and text_blocks(m).strip()),
+        "",
+    )
+    assistant = next(
+        (text_blocks(m) for m in reversed(messages) if m.get("role") == "assistant" and text_blocks(m).strip()),
+        "",
+    )
+    if not user or not assistant or user.startswith("JCODE_OPERATOR_INTERNAL"):
+        continue
+    rows.append(
+        {
+            "session_id": session.get("id") or path.stem,
+            "cwd": session.get("working_dir"),
+            "model": session.get("model"),
+            "updated_at": session.get("updated_at"),
+            "intent": user[:1000],
+            "result": assistant[:3000],
+        }
+    )
+
+rows.sort(key=lambda row: row.get("updated_at") or "", reverse=True)
+print(json.dumps(rows[: max(1, args.limit)], ensure_ascii=False, indent=2))

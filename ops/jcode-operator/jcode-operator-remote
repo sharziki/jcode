@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+exec ssh "${JCODE_REMOTE_HOST:-root@100.86.211.91}" /root/bin/jcode-operator "$@"
