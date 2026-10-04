@@ -15,6 +15,25 @@ Thin operating layer for Sharvil's canonical JCode server.
 - `coordinator-overlay.md` defines routing, worker ownership, continuation,
   checkpoints, model selection, and verification. Install it as the local
   state's `prompt-overlay.md`.
+- `efficiency-spec.md` defines the graph → constitution → spec → build → verify
+  contract. The installed overlay applies it to project work; it is model
+  guidance, not a hard tool gate. Graphify uses local code extraction by default.
+- `efficiency-policy.md` is the shared source for managed sections in the local
+  Jcode overlay, `~/.claude/CLAUDE.md`, and `~/.codex/AGENTS.md`. Keep these sections
+  identical. Claude's `effortLevel` is medium; requested model choices stay intact.
+  Jcode's `agents.swarm_max_concurrent_agents` is four. Settings are backed up
+  before modification; do not restart active workers just to change defaults.
+- Quiet display uses the existing settings below in `~/.jcode-local/config.toml`.
+  Reopen the TUI to apply display changes; Ctrl+T exposes the full transcript.
+  Hiding reasoning does not reduce billed reasoning tokens.
+
+```toml
+[display]
+show_thinking = false
+reasoning_display = "off"
+focused_output = true
+compact_notifications = true
+```
 
 JCode owns execution. Nova owns durable context. User-facing sessions coordinate;
 spawned workers implement their assigned project scope.
