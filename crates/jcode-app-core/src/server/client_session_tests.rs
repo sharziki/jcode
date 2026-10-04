@@ -515,3 +515,37 @@ mod clear_tests;
 mod reload_tests;
 #[path = "client_session_tests/resume.rs"]
 mod resume_tests;
+
+#[tokio::test]
+async fn resume_preserves_existing_coordinator_swarm() {
+    let mut temporary = test_swarm_member("temporary", "spawned");
+    temporary.swarm_id = Some("temporary-swarm".to_string());
+    let mut coordinator = test_swarm_member("coordinator", "stopped");
+    coordinator.role = "coordinator".to_string();
+    coordinator.report_back_to_session_id = None;
+    let members = Arc::new(RwLock::new(HashMap::from([
+        ("temporary".to_string(), temporary),
+        ("coordinator".to_string(), coordinator),
+    ])));
+    let swarms = Arc::new(RwLock::new(HashMap::from([
+        (
+            "temporary-swarm".to_string(),
+            HashSet::from(["temporary".to_string()]),
+        ),
+        (
+            "swarm-test".to_string(),
+            HashSet::from(["coordinator".to_string(), "worker".to_string()]),
+        ),
+    ])));
+    rename_swarm_member_session("temporary", "coordinator", &members, &swarms).await;
+    let members = members.read().await;
+    let coordinator = &members["coordinator"];
+    assert_eq!(coordinator.role, "coordinator");
+    assert_eq!(coordinator.swarm_id.as_deref(), Some("swarm-test"));
+    assert_eq!(coordinator.status, "ready");
+    let swarms = swarms.read().await;
+    assert!(!swarms["temporary-swarm"].contains("coordinator"));
+    assert!(!swarms["temporary-swarm"].contains("temporary"));
+    assert!(swarms["swarm-test"].contains("coordinator"));
+    assert!(swarms["swarm-test"].contains("worker"));
+}

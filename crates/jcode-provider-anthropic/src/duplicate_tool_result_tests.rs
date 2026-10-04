@@ -195,3 +195,50 @@ fn synthetic_interrupt_placeholder_text_is_also_treated_as_a_placeholder() {
         ))
     );
 }
+
+#[test]
+fn scheduled_wake_before_parallel_results_repairs_adjacency() {
+    let mut calls = tool_use("toolu_1");
+    calls.content.extend(tool_use("toolu_2").content);
+    let messages = vec![
+        text_msg(Role::User, "check tests"),
+        calls,
+        tool_result("toolu_1", TOOL_OUTPUT_MISSING_TEXT, Some(true)),
+        text_msg(Role::User, "[Scheduled task] wakeup"),
+        tool_use("toolu_3"),
+        tool_result("toolu_1", "1315 passed", None),
+        tool_result("toolu_2", "592 passed", None),
+        tool_result("toolu_3", "checkpointed", None),
+        text_msg(Role::User, "continue"),
+    ];
+    for oauth in [false, true] {
+        let formatted = format_messages(&messages, oauth);
+        assert_unique_tool_results(&formatted);
+        for (i, msg) in formatted.iter().enumerate() {
+            for block in &msg.content {
+                if let ApiContentBlock::ToolUse { id, .. } = block {
+                    let next = &formatted[i + 1];
+                    assert_eq!(next.role, "user");
+                    assert!(
+                        next.content.iter().any(|b| matches!(b,
+                            ApiContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == id
+                        )),
+                        "{id} missing adjacent result"
+                    );
+                }
+                if let ApiContentBlock::ToolResult { tool_use_id, .. } = block {
+                    assert!(
+                        formatted[i - 1].content.iter().any(|b| matches!(b,
+                            ApiContentBlock::ToolUse { id, .. } if id == tool_use_id
+                        )),
+                        "{tool_use_id} has no adjacent call"
+                    );
+                }
+            }
+        }
+        let json = serde_json::to_string(&formatted).unwrap();
+        assert!(json.contains("1315 passed"));
+        assert!(json.contains("592 passed"));
+        assert!(!json.contains(TOOL_OUTPUT_MISSING_TEXT));
+    }
+}

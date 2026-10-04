@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 /// Claude Code billing attribution text observed in the official CLI's system
 /// prompt blocks.
-pub const OAUTH_BILLING_HEADER: &str = "cc_version=2.1.257; cc_entrypoint=sdk-cli; cch=33f85;";
+pub const OAUTH_BILLING_HEADER: &str = "cc_version=2.1.289; cc_entrypoint=sdk-cli; cch=33f85;";
 
 const CLAUDE_CODE_IDENTITY: &str = "You are a Claude agent, built on Anthropic's Claude Agent SDK.";
 
@@ -16,8 +16,6 @@ const CLAUDE_CODE_IDENTITY: &str = "You are a Claude agent, built on Anthropic's
 pub(crate) const CONTINUATION_USER_TURN: &str = "Continue.";
 
 pub fn format_messages(messages: &[Message], is_oauth: bool) -> Vec<ApiMessage> {
-    use std::collections::HashSet;
-
     // Pre-pass: drop duplicate tool_results for the same tool_use_id.
     //
     // Anthropic rejects the whole request (400 "unexpected `tool_use_id` found
@@ -30,72 +28,55 @@ pub fn format_messages(messages: &[Message], is_oauth: bool) -> Vec<ApiMessage> 
     // over the synthetic placeholder, and otherwise keep the first occurrence.
     let messages = &dedupe_tool_results(messages);
 
-    // First pass: collect all tool_use IDs and tool_result IDs
-    let mut tool_use_ids: HashSet<String> = HashSet::new();
-    let mut tool_result_ids: HashSet<String> = HashSet::new();
-
+    // Results can arrive after a scheduled wake has already started another
+    // assistant turn. Presence anywhere in history is insufficient: Anthropic
+    // requires the result immediately after its call. Move the winning output
+    // beside its call, without replaying tools or editing the saved transcript.
+    let mut outputs = std::collections::HashMap::new();
     for msg in messages {
-        for block in &msg.content {
-            match block {
-                ContentBlock::ToolUse { id, .. } => {
-                    tool_use_ids.insert(id.clone());
-                }
-                ContentBlock::ToolResult { tool_use_id, .. } => {
-                    tool_result_ids.insert(tool_use_id.clone());
-                }
-                _ => {}
+        // Format before relocating so images and their labels remain inside
+        // their associated tool_result, including parallel image reads.
+        for block in format_content_blocks(&msg.content, is_oauth) {
+            if let ApiContentBlock::ToolResult { tool_use_id, .. } = &block {
+                outputs.insert(tool_use_id.clone(), block);
             }
         }
     }
-
-    // Find dangling tool_uses (no matching tool_result)
-    let dangling: HashSet<_> = tool_use_ids.difference(&tool_result_ids).cloned().collect();
-    if !dangling.is_empty() {
-        jcode_logging::info(&format!(
-            "[anthropic] Repairing {} dangling tool_use(s) by injecting synthetic tool_results",
-            dangling.len()
-        ));
-    }
-
-    // Second pass: build messages, injecting synthetic tool_results after assistant messages
-    // that have dangling tool_uses
     let mut result: Vec<ApiMessage> = Vec::new();
-
     for msg in messages {
-        let role = match msg.role {
-            Role::User => "user",
-            Role::Assistant => "assistant",
-        };
-
-        let content = format_content_blocks(&msg.content, is_oauth);
-
+        let content = format_content_blocks(&msg.content, is_oauth)
+            .into_iter()
+            .filter(|block| !matches!(block, ApiContentBlock::ToolResult { .. }))
+            .collect::<Vec<_>>();
         if !content.is_empty() {
             result.push(ApiMessage {
-                role: role.to_string(),
+                role: match msg.role {
+                    Role::User => "user",
+                    Role::Assistant => "assistant",
+                }
+                .to_string(),
                 content,
             });
         }
-
-        // If this is an assistant message with dangling tool_uses, inject synthetic results
         if matches!(msg.role, Role::Assistant) {
-            let mut synthetic_results: Vec<ApiContentBlock> = Vec::new();
+            let mut results = Vec::new();
             for block in &msg.content {
-                if let ContentBlock::ToolUse { id, .. } = block
-                    && dangling.contains(id)
-                {
-                    synthetic_results.push(ApiContentBlock::ToolResult {
-                        tool_use_id: sanitize_tool_id(id),
-                        content: ToolResultContent::Text(
-                            "[Session interrupted before tool execution completed]".to_string(),
-                        ),
-                        is_error: true,
-                    });
+                if let ContentBlock::ToolUse { id, .. } = block {
+                    results.push(outputs.remove(&sanitize_tool_id(id)).unwrap_or_else(|| {
+                        ApiContentBlock::ToolResult {
+                            tool_use_id: sanitize_tool_id(id),
+                            content: ToolResultContent::Text(
+                                "[Session interrupted before tool execution completed]".to_string(),
+                            ),
+                            is_error: true,
+                        }
+                    }));
                 }
             }
-            if !synthetic_results.is_empty() {
+            if !results.is_empty() {
                 result.push(ApiMessage {
                     role: "user".to_string(),
-                    content: synthetic_results,
+                    content: results,
                 });
             }
         }

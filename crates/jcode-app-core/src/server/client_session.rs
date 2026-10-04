@@ -931,32 +931,49 @@ async fn rename_swarm_member_session(
     // Never hold both swarm maps at once. Coordinator cleanup reads them in the
     // opposite order, so retaining the member write guard while waiting for the
     // swarm map can permanently deadlock reconnects and every later subscribe.
-    let renamed_swarm_id = {
+    let renamed_swarms = {
         let mut members = swarm_members.write().await;
-        let renamed_swarm_id = members.remove(old_session_id).and_then(|mut member| {
-            let swarm_id = member.swarm_id.clone();
-            member.session_id = new_session_id.to_string();
-            member.status = "ready".to_string();
-            member.detail = None;
-            members.insert(new_session_id.to_string(), member);
-            swarm_id
+        let renamed_swarms = members.remove(old_session_id).map(|mut member| {
+            let source_swarm = member.swarm_id.clone();
+            let target_swarm = if let Some(target) = members.get_mut(new_session_id) {
+                // A resumed coordinator already owns a durable swarm. The new
+                // client's temporary member must not replace its role/group.
+                target.event_tx = member.event_tx;
+                target.event_txs.extend(member.event_txs);
+                if target.status != "running" {
+                    target.status = "ready".to_string();
+                    target.detail = None;
+                }
+                target.swarm_id.clone()
+            } else {
+                member.session_id = new_session_id.to_string();
+                member.status = "ready".to_string();
+                member.detail = None;
+                let target_swarm = member.swarm_id.clone();
+                members.insert(new_session_id.to_string(), member);
+                target_swarm
+            };
+            (source_swarm, target_swarm)
         });
-
-        // Keep the spawn tree intact across the rename: children that reported
-        // back to the old session id must follow it.
         for member in members.values_mut() {
             if member.report_back_to_session_id.as_deref() == Some(old_session_id) {
                 member.report_back_to_session_id = Some(new_session_id.to_string());
             }
         }
-        renamed_swarm_id
+        renamed_swarms
     };
-
-    if let Some(swarm_id) = renamed_swarm_id {
+    if let Some((source_swarm, target_swarm)) = renamed_swarms {
         let mut swarms = swarms_by_id.write().await;
-        if let Some(swarm) = swarms.get_mut(&swarm_id) {
+        if let Some(source_swarm) = source_swarm
+            && let Some(swarm) = swarms.get_mut(&source_swarm)
+        {
             swarm.remove(old_session_id);
-            swarm.insert(new_session_id.to_string());
+        }
+        if let Some(target_swarm) = target_swarm {
+            swarms
+                .entry(target_swarm)
+                .or_default()
+                .insert(new_session_id.to_string());
         }
     }
 }

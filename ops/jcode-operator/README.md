@@ -4,14 +4,23 @@ Thin operating layer for Sharvil's canonical JCode server.
 
 ## Runtime
 
-- Interactive default: `jcode` → server through native SSH transport.
-- Routine model: `jcode-fast` / `jcode-fast run ...` → `gpt-5.6-sol` on server.
-- Deep model: `jcode-deep` / `jcode-deep run ...` → `claude-opus-5` on server.
-- Local escape hatch: `jcode-here` → isolated laptop state.
-- Operations: `jcode-operator status|doctor|daily|weekly` → canonical server.
+- `jcode` opens the existing persistent coordinator locally, using Claude Opus
+  5.5 at medium effort. It resumes the same thread and project workers.
+- `scripts/jcode-local-launcher.sh` is the sole launcher implementation. Fish
+  and bash use the same PATH entry. Remote work requires an explicit `--ssh`.
+- Local state, credentials, sessions, and builds live in `~/.jcode-local`.
+  Older mirrored data in `~/.jcode` stays archived and recoverable.
+- `jcode-gateway.service` supervises the local daemon independently of the TUI.
+  Closing the terminal leaves its headless workers running.
+- `coordinator-overlay.md` defines routing, worker ownership, continuation,
+  checkpoints, model selection, and verification. Install it as the local
+  state's `prompt-overlay.md`.
 
-JCode stays execution runtime. Nova stays durable context/outcome store. SXOS
-stays priority/autonomy control loop. No additional daemon is introduced.
+JCode owns execution. Nova owns durable context. User-facing sessions coordinate;
+spawned workers implement their assigned project scope.
+
+The server installation below documents the previous explicit remote operator
+setup. It is not the default local `jcode` launcher.
 
 ## Installed server pieces
 
