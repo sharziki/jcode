@@ -1210,6 +1210,11 @@ pub(super) fn build_body_from_base(
     msg_count: usize,
 ) -> (Arc<PreparedMessages>, &'static str) {
     let messages = app.display_messages();
+    // A newly appended tool can make the preceding assistant text internal
+    // narration. Rebuild the focused view so cached prose does not leak through.
+    if !app.full_transcript_visible() {
+        return (Arc::new(prepare_body(app, width, false)), "full");
+    }
     // A stale deferred-mermaid base (its background render finished after the
     // base was built) must not be reused verbatim: cut it at the message that
     // owns the first pending placeholder so that message and everything after
@@ -1388,12 +1393,17 @@ fn render_message_into(
     let centered = ctx.centered;
     let app = ctx.app;
     let role = msg.effective_role();
-    let focused_system_result = role == "system"
-        && !app.is_processing()
-        && msg_global_idx + 1 == ctx.messages.len();
+    let focused_system_result =
+        role == "system" && !app.is_processing() && msg_global_idx + 1 == ctx.messages.len();
+    let assistant_narration = role == "assistant"
+        && (!msg.tool_calls.is_empty()
+            || ctx.messages[msg_global_idx + 1..]
+                .iter()
+                .find(|next| !matches!(next.effective_role(), "reasoning" | "meta"))
+                .is_some_and(|next| next.effective_role() == "tool"));
     if !app.full_transcript_visible()
-        && !matches!(role, "user" | "assistant" | "error")
-        && !focused_system_result
+        && (assistant_narration
+            || (!matches!(role, "user" | "assistant" | "error") && !focused_system_result))
     {
         return;
     }

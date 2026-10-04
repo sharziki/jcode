@@ -1331,6 +1331,72 @@ fn focused_output_hides_intermediate_transcript_and_shows_progress() {
 }
 
 #[test]
+fn focused_output_hides_tool_narration_and_keeps_results_and_errors() {
+    let _guard = crate::storage::lock_test_env();
+    clear_test_render_state_for_tests();
+    let mut narration = DisplayMessage::assistant("Checking the container now.");
+    narration.tool_calls.push("bash".to_string());
+    let state = TestState {
+        focused_output: true,
+        display_messages: vec![
+            DisplayMessage::user("ship it"),
+            narration,
+            DisplayMessage::tool_text("container output"),
+            DisplayMessage::assistant("Checking the deploy next."),
+            DisplayMessage::tool_text("deploy output"),
+            DisplayMessage::error("deploy failed"),
+            DisplayMessage::assistant("Deployed. Health check passed."),
+        ],
+        ..Default::default()
+    };
+    let rendered = prepare::prepare_messages(&state, 100, 30)
+        .materialize_all_lines()
+        .iter()
+        .map(extract_line_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(rendered.contains("ship it"), "{rendered}");
+    assert!(rendered.contains("deploy failed"), "{rendered}");
+    assert!(
+        rendered.contains("Deployed. Health check passed."),
+        "{rendered}"
+    );
+    assert!(!rendered.contains("Checking"), "{rendered}");
+    assert!(!rendered.contains("output"), "{rendered}");
+}
+
+#[test]
+fn focused_output_removes_cached_narration_when_a_tool_arrives() {
+    let _guard = crate::storage::lock_test_env();
+    clear_test_render_state_for_tests();
+    let mut state = TestState {
+        focused_output: true,
+        display_messages: vec![
+            DisplayMessage::user("fix it"),
+            DisplayMessage::assistant("Checking now."),
+        ],
+        ..Default::default()
+    };
+    let render = |state: &TestState| {
+        prepare::prepare_messages(state, 100, 30)
+            .materialize_all_lines()
+            .iter()
+            .map(extract_line_text)
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    assert!(render(&state).contains("Checking now."));
+    state
+        .display_messages
+        .push(DisplayMessage::tool_text("internal output"));
+    state.messages_version += 1;
+    assert!(!render(&state).contains("Checking now."));
+    state.focused_output = false;
+    let full = render(&state);
+    assert!(full.contains("Checking now."), "{full}");
+}
+
+#[test]
 fn focused_output_keeps_latest_idle_system_result() {
     let _guard = crate::storage::lock_test_env();
     clear_test_render_state_for_tests();

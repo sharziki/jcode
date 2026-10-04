@@ -8,6 +8,10 @@
   working implementation, action first. Read applicable skills once per session;
   apply them without repeatedly loading their full text. Report only necessary
   decisions, blockers, and verified meaningful results. Keep code and errors exact.
+- Quiet is the default: use short, plain words. Normal replies fit in 30 words;
+  explain more only when asked or needed for a clear decision. No routine tool
+  narration, "checking now", phase recaps, or repeated status prose. Keep working
+  indicators and errors visible so silence is never mistaken for a stalled agent.
 - Use Nova at startup and after compaction: `context_pack`, 1–3 relevant entities,
   same session ID, maximum 3000 tokens. On long work, use `delta`, 1200 tokens,
   draining `has_more`. Open relevant pages before relying on them. If MCP fails,

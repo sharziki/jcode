@@ -26,6 +26,15 @@ Thin operating layer for Sharvil's canonical JCode server.
 - Quiet display uses the existing settings below in `~/.jcode-local/config.toml`.
   Reopen the TUI to apply display changes; Ctrl+T exposes the full transcript.
   Hiding reasoning does not reduce billed reasoning tokens.
+- Quiet mode hides assistant text attached to tool calls or followed by tool
+  output, as well as tool output and reasoning. The working indicator, errors,
+  and final replies remain visible; Ctrl+T restores the full transcript.
+- `quiet-output-style.md` installs as
+  `~/.claude/output-styles/quiet-caveman.md`; Claude's global `outputStyle` is
+  `Quiet Caveman`, with coding instructions retained. Restart/resume Claude
+  after adding the style file. Codex uses `hide_agent_reasoning = true`,
+  `show_raw_agent_reasoning = false`, and `model_verbosity = "low"` at the top
+  level of its config. These settings do not remove Codex's native tool cards.
 
 ```toml
 [display]

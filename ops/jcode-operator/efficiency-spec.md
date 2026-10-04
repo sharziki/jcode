@@ -31,6 +31,11 @@ the coordinator integrates and verifies. Preserve authorization and rollback.
 
 ## Verification
 
+Quiet-mode repair: hide assistant narration attached to a tool call or immediately
+followed by tool output, retain errors and final replies, and keep the working
+indicator. Ctrl+T must still expose the full transcript. Test cached updates too.
+Use short plain words in replies; quiet display cannot enforce model phrasing.
+
 Capture a local token baseline without another model call. Validate JSON/TOML
 settings and exact policy parity across all three agents. Validate Graphify
 extraction and targeted queries, overlay
