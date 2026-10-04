@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# One persistent OAuth cache for every local coding agent. The CLI key is a
+# separate credential; sending an expired key makes the MCP proxy reauthorize.
+export MCP_REMOTE_CONFIG_DIR="${HOME}/.mcp-auth"
+exec "${HOME}/.local/bin/mcp-remote" \
+  https://21st.dev/api/mcp \
+  --static-oauth-client-metadata \
+  '{"scope":"openid profile email offline_access","grant_types":["authorization_code","refresh_token"]}'

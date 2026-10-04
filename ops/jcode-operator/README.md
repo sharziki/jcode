@@ -47,6 +47,12 @@ compact_notifications = true
 JCode owns execution. Nova owns durable context. User-facing sessions coordinate;
 spawned workers implement their assigned project scope.
 
+`21st-mcp` is the shared local 21st OAuth launcher, linked from
+`~/.local/bin/21st-mcp`. It uses `~/.mcp-auth`, requests offline access and
+refresh tokens, and does not send the separate CLI key. A rejected CLI key
+previously caused HTTP 401 and repeated browser fallback. A successful browser
+consent and live tools listing must be verified before calling auth repaired.
+
 The server installation below documents the previous explicit remote operator
 setup. It is not the default local `jcode` launcher.
 
