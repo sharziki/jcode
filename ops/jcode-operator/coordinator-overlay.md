@@ -26,6 +26,13 @@ Sharvil manage worker terminals, sessions, retries, or model routing.
 <!-- BEGIN SHARED EFFICIENCY POLICY -->
 ## Impact and token budget
 
+- Caveman FULL mode is the default for every session and every reply, including
+  resumed sessions and workers, unless the user specifies another style or mode.
+  Drop articles (a/an/the), pleasantries, hedging, and filler. Use short words and
+  direct fragments: result, reason, next step. Do not announce this mode each turn.
+  Keep technical facts exact; use clear sentences when brevity risks ambiguity.
+  Write code, commits, and PRs normally. Apply these rules without loading the
+  full skill text again on each turn.
 - Own authorized outcomes. Plan internally, resolve routine choices, and proceed
   until acceptance passes or a real blocker needs input. Prioritize useful shipped
   work over extra agents, documents, features, or activity. Project files and
