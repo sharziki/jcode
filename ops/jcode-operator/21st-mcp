@@ -1,10 +1,35 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# One persistent OAuth cache for every local coding agent. The CLI key is a
-# separate credential; sending an expired key makes the MCP proxy reauthorize.
+key_file="${HOME}/.config/21st/mcp-key"
+if [[ "${1:-}" == --set-key ]]; then
+  read -r -s -p 'Paste 21st API key: ' new_key
+  printf '\n' >&2
+  if ! TWENTYFIRST_TOKEN="$new_key" "${HOME}/.local/bin/21st" usage --json >/dev/null 2>&1; then
+    printf '%s\n' 'Key rejected by 21st; nothing saved.' >&2
+    exit 1
+  fi
+  mkdir -p "${HOME}/.config/21st"
+  (umask 077; printf '%s' "$new_key" > "$key_file")
+  printf '%s\n' '21st MCP key saved and verified.' >&2
+  exit 0
+fi
+
+if [[ -s "$key_file" ]]; then
+  export TWENTYFIRST_TOKEN="$(<"$key_file")"
+else
+  export TWENTYFIRST_TOKEN="$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(process.env.HOME + "/.config/21st/auth.json", "utf8")).token)' 2>/dev/null || true)"
+fi
+if [[ -z "$TWENTYFIRST_TOKEN" ]] || ! "${HOME}/.local/bin/21st" usage --json >/dev/null 2>&1; then
+  printf '%s\n' '21st MCP: key invalid. Get one at https://21st.dev/mcp, then run `21st-mcp --set-key`.' >&2
+  exit 1
+fi
+
 export MCP_REMOTE_CONFIG_DIR="${HOME}/.mcp-auth"
+export BROWSER=/usr/bin/true
 exec "${HOME}/.local/bin/mcp-remote" \
   https://21st.dev/api/mcp \
-  --static-oauth-client-metadata \
-  '{"scope":"openid profile email offline_access","grant_types":["authorization_code","refresh_token"]}'
+  --transport http-only \
+  --auth-timeout 5 \
+  --silent \
+  --header 'x-api-key:${TWENTYFIRST_TOKEN}'
